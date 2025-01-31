@@ -36,7 +36,7 @@ YC_SECRET_ID = os.getenv("YC_SECRET_ID")
 DB_NAME = "reminders.db"
 ALLOWED_USERS = [313049106]  # ID разрешенных пользователей
 ADMIN_ID = 313049106  # ID администратора
-DT_FORMAT = "%d/%m/%Y, %H:%M"
+DT_FORMAT = "%Y/%m/%d, %H:%M"
 OPTIMAL_TASKS_DELTA = timedelta(hours=1)
 
 # Валидация времени
