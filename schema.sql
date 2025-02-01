@@ -41,10 +41,3 @@ CREATE TABLE IF NOT EXISTS pending_reminders (
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE SET NULL
 );
-
-CREATE TABLE IF NOT EXISTS pending_users (
-    telegram_id INTEGER PRIMARY KEY,
-    full_name TEXT,
-    username TEXT,
-    requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);

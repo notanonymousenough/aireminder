@@ -29,6 +29,16 @@ class Database:
             logging.error(f"Error getting user: {e}")
             return None
 
+    def list_users(self) -> List[Dict]:
+        try:
+            rows = self.conn.execute(
+                "SELECT * FROM users"
+            ).fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error as e:
+            logging.error(f"Error getting user: {e}")
+            return None
+
     def create_user(self, user_data: Dict) -> bool:
         try:
             self.conn.execute(

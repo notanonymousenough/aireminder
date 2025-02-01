@@ -66,9 +66,17 @@ class ReminderBot:
     def user_is_admin(self, user: dict):
         return user.get("is_admin", False) or user.get("telegram_id", 0) == ADMIN_ID
 
-    def user_id_is_allowed(self, user_id: int):
-        user = self.db.get_user(user_id)
-        return user is not None and user.get("is_allowed", False) or user_id in ALLOWED_USERS
+    def is_tg_user_allowed(self, tg_user: telegram.User):
+        user = self.db.get_user(tg_user.id)
+        # Регистрация пользователя
+        if user is None:
+            self.db.create_user({
+                'telegram_id': tg_user.id,
+                'full_name': tg_user.full_name,
+                'username': tg_user.username
+            })
+
+        return user is not None and user.get("is_allowed", False) or tg_user.id in ALLOWED_USERS
 
     def select_nearest_time_for_tag(self, user_id, tag_name) -> datetime:
         for tag in self.db.get_user_tags(user_id):
@@ -86,16 +94,8 @@ class ReminderBot:
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
-        if not self.user_id_is_allowed(user.id):
+        if not self.is_tg_user_allowed(user):
             return
-
-        # Регистрация пользователя
-        if not self.db.get_user(user.id):
-            self.db.create_user({
-                'telegram_id': user.id,
-                'full_name': user.full_name,
-                'username': user.username
-            })
 
         keyboard = [
             [InlineKeyboardButton("Мои напоминания", callback_data='list_tasks')],
@@ -110,15 +110,19 @@ class ReminderBot:
 
     async def help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
-        if not self.user_id_is_allowed(user.id):
+        if not self.is_tg_user_allowed(user):
             return
+
+        if self.user_is_admin(self.db.get_user(user.id)):
+            await self.bot.send_message(user.id,
+                                        "VIP команды: /allow, /ban /list")
 
         await self.bot.send_message(user.id,
         "/newtag <НазваниеТега> <НачалоПланирования> <КонецПланирования>")
 
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
-        if not self.user_id_is_allowed(user.id):
+        if not self.is_tg_user_allowed(user):
             return
 
         # Получаем теги пользователя
@@ -152,7 +156,6 @@ class ReminderBot:
             keyboard = []
             unconfirmed_reminders = self.db.list_unconfirmed_reminders(user.id)
             for unconfirmed_reminder in unconfirmed_reminders:
-                print(unconfirmed_reminder)
                 text = f"{unconfirmed_reminder["tag_id"]} - {unconfirmed_reminder['text']} ({short_format_datetime(parse_datetime(unconfirmed_reminder['due_time']))})"
                 callback_data = f"confirm_task:{unconfirmed_reminder["id"]}"
                 keyboard.append([InlineKeyboardButton(text, callback_data=callback_data)])
@@ -170,7 +173,7 @@ class ReminderBot:
 
     async def confirm_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
-        if not self.user_id_is_allowed(user.id):
+        if not self.is_tg_user_allowed(user):
             return
         query = update.callback_query
         unconfirmed_task_id = query.data.split(":")[1]
@@ -202,7 +205,7 @@ class ReminderBot:
 
     async def create_tag(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
-        if not self.user_id_is_allowed(user.id):
+        if not self.is_tg_user_allowed(user):
             return
 
         try:
@@ -228,9 +231,79 @@ class ReminderBot:
             await self.bot.send_message(user.id,
                 "Использование: /newtag <название> <начало> <конец>\nПример: /newtag Работа 09:00 18:00")
 
+    async def allow(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        if not self.is_tg_user_allowed(user):
+            return
+        if not self.user_is_admin(self.db.get_user(user.id)):
+            return
+
+        try:
+            args = context.args
+            if len(args) != 1:
+                raise ValueError
+
+            telegram_id = args[0]
+            if self.db.get_user(telegram_id) and self.db.update_user_permission(telegram_id, True):
+                await self.bot.send_message(user.id, f"✅ Доступ пользователю '{telegram_id}' успешно предоставлен!")
+        except ValueError:
+            await self.bot.send_message(user.id,
+                "Использование: /allow <telegram_id>")
+
+    async def user_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        if not self.is_tg_user_allowed(user):
+            return
+        if not self.user_is_admin(self.db.get_user(user.id)):
+            return
+
+        keyboard = []
+        users = self.db.list_users()
+        for user in users:
+            text = f"{user["full_name"]} - tg Id: {user['telegram_id']} ({"Allowed" if user["is_allowed"] else "New"}) {"VIP" if user["is_admin"] else ""}"
+            callback_data = f"user_get:{user["telegram_id"]}"
+            keyboard.append([InlineKeyboardButton(text, callback_data=callback_data)])
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "Выберите пользователя для подробностей:",
+            reply_markup=reply_markup
+        )
+
+    async def user_get(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        if not self.is_tg_user_allowed(user):
+            return
+        if not self.user_is_admin(self.db.get_user(user.id)):
+            return
+
+        query = update.callback_query
+        telegram_id = query.data.split(":")[1]
+        db_user = self.db.get_user(telegram_id)
+        await self.bot.send_message(user.id, str(db_user))
+
+    async def disallow(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        if not self.is_tg_user_allowed(user):
+            return
+        if not self.user_is_admin(self.db.get_user(user.id)):
+            return
+
+        try:
+            args = context.args
+            if len(args) != 1:
+                raise ValueError
+
+            telegram_id = args[0]
+            if self.db.get_user(telegram_id) and self.db.update_user_permission(telegram_id, False):
+                await self.bot.send_message(user.id, f"✅ Доступ пользователю '{telegram_id}' успешно оторван!")
+        except ValueError:
+            await self.bot.send_message(user.id,
+                "Использование: /ban <telegram_id>")
+
     async def list_tags(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
-        if not self.user_id_is_allowed(user.id):
+        if not self.is_tg_user_allowed(user):
             return
         tags = self.db.get_user_tags(user.id)
 
@@ -245,7 +318,7 @@ class ReminderBot:
 
     async def list_tasks(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
-        if not self.user_id_is_allowed(user.id):
+        if not self.is_tg_user_allowed(user):
             return
         tasks = self.db.list_uncompleted_reminders(user.id)
 
@@ -267,10 +340,14 @@ if __name__ == "__main__":
     application.add_handler(CommandHandler("start", bot.start))
     application.add_handler(CommandHandler("newtag", bot.create_tag))
     application.add_handler(CommandHandler("help", bot.help))
+    application.add_handler(CommandHandler("allow", bot.allow))
+    application.add_handler(CommandHandler("ban", bot.disallow))
+    application.add_handler(CommandHandler("list", bot.user_list))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message))
     application.add_handler(CallbackQueryHandler(bot.confirm_task, pattern="^confirm_task:"))
     application.add_handler(CallbackQueryHandler(bot.list_tags, pattern="^list_tags"))
     application.add_handler(CallbackQueryHandler(bot.list_tasks, pattern="^list_tasks"))
+    application.add_handler(CallbackQueryHandler(bot.user_get, pattern="^user_get"))
     application.add_handler(CallbackQueryHandler(bot.help, pattern="^help"))
 
     # Запускаем проверку напоминаний в фоне
