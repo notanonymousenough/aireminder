@@ -41,3 +41,9 @@ CREATE TABLE IF NOT EXISTS pending_reminders (
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE SET NULL
 );
+
+--CREATE TABLE IF NOT EXISTS user_timezone (
+--    id INTEGER PRIMARY KEY AUTOINCREMENT,
+--    user_id INTEGER UNIQUE NOT NULL,
+--    timezone INTEGER
+--);
