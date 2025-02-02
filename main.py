@@ -135,7 +135,7 @@ class ReminderBot:
     async def ask_llm_plan(self, tags: List[Dict], tasks: Dict, query: str) -> Dict:
         tag_str = ", ".join([f"{t['name']} ({t['start_time']}-{t['end_time']})" for t in tags])
         response_format = '{"tagName": [{"text": "taskTitle", "time": "DT_FORMAT"}]}'.replace("DT_FORMAT", DT_FORMAT)
-        system = f"Ты - планировщик напоминаний. Проставь всем задачам из сообщения пользователя время как можно ближе, но не раньше текущего времени {datetime.now().strftime(DT_FORMAT)}. Учитывай пожелания пользователя из поля user_query_context. Список тегов и окон планирования каждого из них: [{tag_str}]. Составь JSON в формате {response_format}. В ответе предоставь только JSON без пояснений, время строго в формате {DT_FORMAT}"
+        system = f"Ты - планировщик напоминаний. Проставь всем задачам из сообщения пользователя время как можно ближе, но не раньше текущего времени {datetime.now().strftime(DT_FORMAT)} ({datetime.now().strftime('%A')}). Учитывай пожелания пользователя из поля user_query_context. Список тегов и окон планирования каждого из них: [{tag_str}]. Составь JSON в формате {response_format}. В ответе предоставь только JSON без пояснений, время строго в формате {DT_FORMAT}"
 
         logging.info(system)
         tasks_with_query = tasks.copy()
