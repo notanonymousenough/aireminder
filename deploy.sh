@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -e
+
 # Deploy Tag
 TARGET_TAG=$1
 # SSH options

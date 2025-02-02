@@ -1,8 +1,9 @@
 #!/bin/bash
 
+set -e
+
 if git diff --quiet && [[ $(git branch --show-current) == "master" ]]; then
     echo "No uncommitted changes and on master branch."
-    exit 0
 else
     echo "Error: Either there are uncommitted changes or not on master branch." >&2
     exit 1

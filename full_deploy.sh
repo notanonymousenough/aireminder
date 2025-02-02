@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -e
+
 VM_USER=$1
 VM_HOST=$2
 
