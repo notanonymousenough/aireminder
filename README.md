@@ -9,7 +9,8 @@ Reminder with LLM recognition.
 3. Create .env file with BOT_TOKEN, YC_FOLDER_ID, YC_SECRET_ID values
 5. `scp .env name@hostname:/opt/aireminder/.env`
 ## Deploy the latest service version
-1. `./deploy.sh VM_USER VM_HOST`
+1. Get the latest tag `git describe --tags --abbrev=0`
+2. `./deploy.sh RELEASE_TAG VM_USER VM_HOST`
 ## Release a new service version
 1. Make changes
 2. Commit and push them to the master branch
