@@ -120,16 +120,31 @@ class ReminderBot:
         await self.bot.send_message(user.id,
         "/newtag <НазваниеТега> <НачалоПланирования> <КонецПланирования>")
 
-    async def ask_llm(self, tag_str: str, query: str) -> Dict:
-        response_format = '{"tagName": [{"text": "taskTitle", "time": "DT_FORMAT"}]}'.replace("DT_FORMAT", DT_FORMAT)
-        system = f"Ты - планировщик напоминаний. Список тегов и окон планирования каждого из них: [{tag_str}]. Сейчас {datetime.now().strftime(DT_FORMAT)}, распланируй задачи из сообщения пользователя как можно ближе, но не раньше текущего времени и составь JSON в формате {response_format}. В ответе предоставь только JSON без пояснений"
+    async def ask_llm_extract(self, tags: List[Dict], query: str) -> Dict:
+        tag_str = ", ".join([f"{t['name']}" for t in tags])
+        response_format = '{"tagName": [{"text": "taskTitle"}]}'
+        system = f"Ты - планировщик напоминаний. Составь список задач из сообщения пользователя и распредели их по тегам без повторений. Учти пожелания пользователя. Список тегов: [{tag_str}]. Составь JSON в формате {response_format}. В ответе предоставь только JSON без пояснений"
 
         logging.info(system)
         logging.info(query)
         response = await self.yandexgpt.query(system, query)
         logging.info(response)
 
-        return response
+        return json.loads(strip_markdown.strip_markdown(response).strip("`"))
+
+    async def ask_llm_plan(self, tags: List[Dict], tasks: Dict, query: str) -> Dict:
+        tag_str = ", ".join([f"{t['name']} ({t['start_time']}-{t['end_time']})" for t in tags])
+        response_format = '{"tagName": [{"text": "taskTitle", "time": "DT_FORMAT"}]}'.replace("DT_FORMAT", DT_FORMAT)
+        system = f"Ты - планировщик напоминаний. Проставь всем задачам из сообщения пользователя время как можно ближе, но не раньше текущего времени {datetime.now().strftime(DT_FORMAT)}. Учитывай пожелания пользователя из поля user_query_context. Список тегов и окон планирования каждого из них: [{tag_str}]. Составь JSON в формате {response_format}. В ответе предоставь только JSON без пояснений, время строго в формате {DT_FORMAT}"
+
+        logging.info(system)
+        tasks_with_query = tasks.copy()
+        tasks_with_query["user_query_context"] = query
+        logging.info(tasks_with_query)
+        response = await self.yandexgpt.query(system, str(tasks_with_query))
+        logging.info(response)
+
+        return json.loads(strip_markdown.strip_markdown(response).strip("`"))
 
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
@@ -138,11 +153,11 @@ class ReminderBot:
 
         # Получаем теги пользователя
         tags = self.db.get_user_tags(user.id)+[{"name": "default", "start_time": "00:00", "end_time": "23:59"}]
-        tag_str = ", ".join([f"{t['name']} ({t['start_time']}-{t['end_time']})" for t in tags])
 
         try:
-            response = await self.ask_llm(tag_str, update.message.text)
-            tasks = json.loads(strip_markdown.strip_markdown(response).strip("`"))
+            query = update.message.text
+            tasks_without_time = await self.ask_llm_extract(tags, query)
+            tasks = await self.ask_llm_plan(tags, tasks_without_time, query)
             context.user_data['pending_tasks'] = tasks
 
             # Формируем список задач для подтверждения
