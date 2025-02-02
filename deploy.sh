@@ -12,8 +12,8 @@ ssh $VM_USER@$VM_HOST << EOF
   cd $PROJECT_PATH
   git fetch --all --tags
   git checkout tags/$TARGET_TAG
-  pip install -r requirements.txt
-  pkill -f "python3.12 main.py"
-  nohup python3.12 main.py > main.log 2>&1 &
+  .venv/bin/pip install -r requirements.txt
+  pkill -f ".venv/bin/python main.py"
+  nohup .venv/bin/python main.py > main.log 2>&1 &
   echo "Successfully deployed tag $TARGET_TAG"
 EOF
