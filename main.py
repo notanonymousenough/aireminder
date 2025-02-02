@@ -120,6 +120,17 @@ class ReminderBot:
         await self.bot.send_message(user.id,
         "/newtag <НазваниеТега> <НачалоПланирования> <КонецПланирования>")
 
+    async def ask_llm(self, tag_str: str, query: str) -> Dict:
+        response_format = '{"tagName": [{"text": "taskTitle", "time": "DT_FORMAT"}]}'.replace("DT_FORMAT", DT_FORMAT)
+        system = f"Ты - планировщик напоминаний. Список тегов и окон планирования каждого из них: [{tag_str}]. Сейчас {datetime.now().strftime(DT_FORMAT)}, распланируй задачи из сообщения пользователя как можно ближе, но не раньше текущего времени и составь JSON в формате {response_format}. В ответе предоставь только JSON без пояснений"
+
+        logging.info(system)
+        logging.info(query)
+        response = await self.yandexgpt.query(system, query)
+        logging.info(response)
+
+        return response
+
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         if not self.is_tg_user_allowed(user):
@@ -129,16 +140,8 @@ class ReminderBot:
         tags = self.db.get_user_tags(user.id)+[{"name": "default", "start_time": "00:00", "end_time": "23:59"}]
         tag_str = ", ".join([f"{t['name']} ({t['start_time']}-{t['end_time']})" for t in tags])
 
-        # Формируем запрос к LLM
-        response_format = '{"tagName": [{"text": "taskTitle", "time": "DT_FORMAT"}]}'.replace("DT_FORMAT", DT_FORMAT)
-        system = f"Привет. Пользователь с тэгами [{tag_str}] хочет запланировать задачи. Сейчас {datetime.now().strftime(DT_FORMAT)}, распланируй эти задачи как можно раньше, но не раньше текущего времени и составь JSON в формате {response_format}. В ответе предоставь только JSON без пояснений"
-        prompt = update.message.text
-
         try:
-            logging.info(system)
-            logging.info(prompt)
-            response = await self.yandexgpt.query(system, prompt)
-            logging.info(response)
+            response = await self.ask_llm(tag_str, update.message.text)
             tasks = json.loads(strip_markdown.strip_markdown(response).strip("`"))
             context.user_data['pending_tasks'] = tasks
 
