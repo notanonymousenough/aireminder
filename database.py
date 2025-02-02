@@ -69,6 +69,18 @@ class Database:
             logging.error(f"Error updating user permission: {e}")
             return False
 
+    # def update_user_timezone(self, telegram_id: int, timezone: int) -> bool:
+    #     try:
+    #         self.conn.execute(
+    #             "UPDATE users SET timezone = ? WHERE telegram_id = ?",
+    #             (timezone, telegram_id)
+    #         )
+    #         self.conn.commit()
+    #         return True
+    #     except sqlite3.Error as e:
+    #         logging.error(f"Error updating user timezone: {e}")
+    #         return False
+
     # Tags
     def create_tag(self, user_id: int, name: str, start_time: str, end_time: str) -> bool:
         try:
