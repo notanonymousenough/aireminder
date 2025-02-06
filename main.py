@@ -123,7 +123,7 @@ class ReminderBot:
     async def ask_llm_extract(self, tags: List[Dict], query: str) -> Dict:
         tag_str = ", ".join([f"{t['name']}" for t in tags])
         response_format = '{"tagName": [{"text": "taskTitle"}]}'
-        system = f"Ты - планировщик напоминаний. Составь список задач из сообщения пользователя и распредели их по тегам без повторений. Учти пожелания пользователя. Список тегов: [{tag_str}]. Составь JSON в формате {response_format}. В ответе предоставь только JSON без пояснений"
+        system = f"Ты - умный планировщик напоминаний. Извлеки список задач (столько, сколько нужно пользователю, но по умолчанию - один) из сообщения пользователя и распредели их по тегам. Учти пожелания пользователя. Список тегов: [{tag_str}]. В ответе предоставь только валидный JSON в формате {response_format} без пояснений"
 
         logging.info(system)
         logging.info(query)
@@ -135,11 +135,10 @@ class ReminderBot:
     async def ask_llm_plan(self, tags: List[Dict], tasks: Dict, query: str) -> Dict:
         tag_str = ", ".join([f"{t['name']} ({t['start_time']}-{t['end_time']})" for t in tags])
         response_format = '{"tagName": [{"text": "taskTitle", "time": "DT_FORMAT"}]}'.replace("DT_FORMAT", DT_FORMAT)
-        system = f"Ты - планировщик напоминаний. Проставь всем задачам из сообщения пользователя время как можно ближе, но не раньше текущего времени {datetime.now().strftime(DT_FORMAT)} ({datetime.now().strftime('%A')}). Учитывай пожелания пользователя из поля user_query_context. Список тегов и окон планирования каждого из них: [{tag_str}]. Составь JSON в формате {response_format}. В ответе предоставь только JSON без пояснений, время строго в формате {DT_FORMAT}"
+        system = f"Ты - умный планировщик напоминаний. Проставь всем извлечённым задачам из сообщения пользователя время как можно ближе к настоящему, но не раньше {datetime.now().strftime(DT_FORMAT)} ({datetime.now().strftime('%A')}). По умолчанию считай, что напомнить нужно сегодня, если это позволяет окно планирования тега и не сказано обратное в сообщении пользователя. Учитывай пожелания пользователя. Список тегов и окон планирования каждого из них: [{tag_str}]. На вход дается JSON с двумя полями: extracted_tasks - извлеченные задачи, которым нужно выставить время; user_query - запрос пользователя, пожелания из которого нужно учесть. В ответе предоставь только валидный JSON в формате {response_format} без пояснений, время строго в формате {DT_FORMAT}"
 
         logging.info(system)
-        tasks_with_query = tasks.copy()
-        tasks_with_query["user_query_context"] = query
+        tasks_with_query = {"extracted_tasks": tasks.copy(), "user_query": query}
         logging.info(tasks_with_query)
         response = await self.yandexgpt.query(system, str(tasks_with_query))
         logging.info(response)
