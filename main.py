@@ -97,7 +97,7 @@ def parse_due_time(due_time) -> datetime:
 
 def short_format_datetime(datetime_value: datetime) -> str:
     if datetime.now().date() == datetime_value.date():
-        return f"сегодня, {datetime_value.strftime("%H:%M")}"
+        return f"сегодня, {SHORT_WEEKDAYS[datetime_value.weekday()]}, {datetime_value.strftime("%H:%M")}"
     elif datetime.now().date() > datetime_value.date():
         return f"прошедшее, {datetime_value.strftime("%H:%M")}"
     elif datetime.now().date() + timedelta(days=1) >= datetime_value.date():
@@ -168,7 +168,7 @@ class ReminderBot:
 
         if self.user_is_admin(self.db.get_user(user.id)):
             await self.bot.send_message(user.id,
-                                        "VIP команды: /allow, /ban /list")
+                                        "VIP команды: /allow, /ban, /list, /dbtasks")
 
         await self.bot.send_message(user.id,
         "/newtag <НазваниеТега> <НачалоПланирования> <КонецПланирования>")
@@ -321,6 +321,24 @@ class ReminderBot:
             await self.bot.send_message(user.id,
                 "Использование: /allow <telegram_id>")
 
+    async def db_tasks_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        if not self.is_tg_user_allowed(user):
+            return
+        if not self.user_is_admin(self.db.get_user(user.id)):
+            return
+
+        all_tasks = list()
+        users = self.db.list_users()
+        for db_user in users:
+            tasks = self.db.get_user_tags(db_user["telegram_id"])
+            for task in tasks:
+                all_tasks.append(task)
+
+        response = "🏷 Все напоминания:\n" + "\n".join([str(task) for task in all_tasks])
+        await user.send_message(response)
+
+
     async def user_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         if not self.is_tg_user_allowed(user):
@@ -414,6 +432,7 @@ if __name__ == "__main__":
     application.add_handler(CommandHandler("allow", bot.allow))
     application.add_handler(CommandHandler("ban", bot.disallow))
     application.add_handler(CommandHandler("list", bot.user_list))
+    application.add_handler(CommandHandler("dbtasks", bot.db_tasks_list))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message))
     application.add_handler(CallbackQueryHandler(bot.confirm_task, pattern="^confirm_task:"))
     application.add_handler(CallbackQueryHandler(bot.list_tags, pattern="^list_tags"))
