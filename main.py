@@ -4,7 +4,7 @@ import yaml
 import sqlite3
 import logging
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 import strip_markdown
 from dotenv import load_dotenv
@@ -73,6 +73,8 @@ SHORT_MONTHS = [
     "дек",
 ]
 
+SERVER_TIMEZONE = timezone(timedelta(hours=3))
+
 # Валидация времени
 def validate_time(time_str: str) -> bool:
     try:
@@ -96,15 +98,15 @@ def parse_due_time(due_time) -> datetime:
         return parse_datetime(due_time)
 
 def short_format_datetime(datetime_value: datetime) -> str:
-    if datetime.now().date() == datetime_value.date():
+    if datetime.now(SERVER_TIMEZONE).date() == datetime_value.date():
         return f"сегодня, {SHORT_WEEKDAYS[datetime_value.weekday()]}, {datetime_value.strftime("%H:%M")}"
-    elif datetime.now().date() > datetime_value.date():
+    elif datetime.now(SERVER_TIMEZONE).date() > datetime_value.date():
         return f"прошедшее, {datetime_value.strftime("%H:%M")}"
-    elif datetime.now().date() + timedelta(days=1) >= datetime_value.date():
+    elif datetime.now(SERVER_TIMEZONE).date() + timedelta(days=1) >= datetime_value.date():
         return f"завтра, {SHORT_WEEKDAYS[datetime_value.weekday()]}, {datetime_value.strftime("%H:%M")}"
-    elif datetime.now().date() + timedelta(days=6) >= datetime_value.date():
+    elif datetime.now(SERVER_TIMEZONE).date() + timedelta(days=6) >= datetime_value.date():
         return f"{SHORT_WEEKDAYS[datetime_value.weekday()]}., {datetime_value.strftime("%H:%M")}"
-    elif datetime.now().date().year == datetime_value.date().year:
+    elif datetime.now(SERVER_TIMEZONE).date().year == datetime_value.date().year:
         return f"{datetime_value.day} {SHORT_MONTHS[datetime_value.month-1]}, {datetime_value.strftime("%H:%M")}"
     return datetime_value.strftime(DT_FORMAT)
 
@@ -138,11 +140,11 @@ class ReminderBot:
                 tasks_timestamps = [parse_due_time(task["due_time"]) for task in tasks]
                 tasks_timestamps.sort()
                 for i in range(len(tasks_timestamps) - 1):
-                    if tasks_timestamps[i] <= datetime.now():
+                    if tasks_timestamps[i] <= datetime.now(SERVER_TIMEZONE):
                         continue
                     if tasks_timestamps[i+1] - tasks_timestamps[i] > OPTIMAL_TASKS_DELTA:
                         return tasks_timestamps[i] + OPTIMAL_TASKS_DELTA
-        return datetime.now() + OPTIMAL_TASKS_DELTA
+        return datetime.now(SERVER_TIMEZONE) + OPTIMAL_TASKS_DELTA
 
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -189,7 +191,7 @@ class ReminderBot:
         tag_str = ", ".join([f"{t['name']} ({t['start_time']}-{t['end_time']})" for t in tags])
         response_format = '{"tagName": [{"text": "taskTitle", "time": "DT_FORMAT"}]}'.replace("DT_FORMAT", DT_FORMAT)
         current_weekday = WEEKDAYS[datetime.today().weekday()]
-        system = f"Ты - умный ассистент пользователя, помогающий ему распланировать напоминания. Проставь всем извлечённым задачам из сообщения пользователя время как можно ближе к настоящему, но не раньше текущего времени {datetime.now().strftime(DT_FORMAT)} ({current_weekday}). По умолчанию считай, что напомнить нужно сегодня, если это позволяет окно планирования тега и не сказано обратное в сообщении пользователя. Учитывай пожелания пользователя, держи адекватное количество времени между задачами, а также предпочитай планировать днём, а не ночью (если это не попросил пользователь). Список тегов и окон планирования каждого из них: [{tag_str}]. На вход дается JSON с двумя полями: extracted_tasks - извлеченные задачи с разбивкой по тегам, которым нужно выставить время; user_query - запрос пользователя, пожелания из которого нужно учесть. В ответе предоставь только валидный JSON в формате {response_format} без пояснений, datetime строго в формате {DT_FORMAT}"
+        system = f"Ты - умный ассистент пользователя, помогающий ему распланировать напоминания. Проставь всем извлечённым задачам из сообщения пользователя время как можно ближе к настоящему, но не раньше текущего времени {datetime.now(SERVER_TIMEZONE).strftime(DT_FORMAT)} ({current_weekday}). По умолчанию считай, что напомнить нужно сегодня, если это позволяет окно планирования тега и не сказано обратное в сообщении пользователя. Учитывай пожелания пользователя, держи адекватное количество времени между задачами, а также предпочитай планировать днём, а не ночью (если это не попросил пользователь). Список тегов и окон планирования каждого из них: [{tag_str}]. На вход дается JSON с двумя полями: extracted_tasks - извлеченные задачи с разбивкой по тегам, которым нужно выставить время; user_query - запрос пользователя, пожелания из которого нужно учесть. В ответе предоставь только валидный JSON в формате {response_format} без пояснений, datetime строго в формате {DT_FORMAT}"
 
         logging.info(system)
         tasks_with_query = {"extracted_tasks": tasks.copy(), "user_query": query}
@@ -265,7 +267,7 @@ class ReminderBot:
         await self.bot.send_message(query.from_user.id, f"Задача {task_data['text']} добавлена!")
 
     async def check_reminders(self, context: ContextTypes.DEFAULT_TYPE):
-        reminders = self.db.get_due_reminders(DT_FORMAT)
+        reminders = self.db.get_due_reminders(DT_FORMAT, SERVER_TIMEZONE)
         for reminder in reminders:
             user = self.db.get_user(reminder['user_id'])
             await self.bot.send_message(

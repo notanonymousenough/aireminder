@@ -220,10 +220,10 @@ class Database:
             logging.error(f"Error listing reminder: {e}")
             return False
 
-    def get_due_reminders(self, DT_FORMAT) -> List[Dict]:
+    def get_due_reminders(self, dt_format, timezone) -> List[Dict]:
         try:
-            now = datetime.now().strftime(DT_FORMAT)
-            now_timestamp = datetime.now().timestamp()
+            now = datetime.now(timezone).strftime(DT_FORMAT)
+            now_timestamp = datetime.now(timezone).timestamp()
             rows = self.conn.execute(
                 "SELECT * FROM reminders WHERE (due_time <= ? or due_time <= ?) AND is_completed = FALSE", (now_timestamp, now)
             ).fetchall()
