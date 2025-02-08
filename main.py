@@ -57,11 +57,28 @@ def validate_time(time_str: str) -> bool:
         return False
 
 def parse_datetime(datetime_str: str) -> datetime:
-    return datetime.strptime(datetime_str, DT_FORMAT)
+    return datetime.strptime(str(datetime_str), DT_FORMAT)
+
+def parse_timestamp(timestamp_str) -> datetime:
+    if type(timestamp_str) == str:
+        timestamp_str = int(timestamp_str)
+    return datetime.fromtimestamp(timestamp_str)
+
+def parse_due_time(due_time) -> datetime:
+    try:
+        return parse_timestamp(due_time)
+    except:
+        return parse_datetime(due_time)
 
 def short_format_datetime(datetime_value: datetime) -> str:
     if datetime.now().date() == datetime_value.date():
-        return datetime_value.strftime("%H:%M")
+        return f"сегодня, {datetime_value.strftime("%H:%M")}"
+    elif datetime.now().date() > datetime_value.date():
+        return f"прошедшее, {datetime_value.strftime("%H:%M")}"
+    elif datetime.now().date() + timedelta(days=1) == datetime_value.date():
+        return f"завтра, {datetime_value.strftime("%H:%M")}"
+    elif datetime.now().date() + timedelta(days=2) == datetime_value.date():
+        return f"послезавтра, {datetime_value.strftime("%H:%M")}"
     return datetime_value.strftime(DT_FORMAT)
 
 class ReminderBot:
@@ -91,7 +108,7 @@ class ReminderBot:
         for tag in self.db.get_user_tags(user_id):
             if tag["name"] == tag_name:
                 tasks = self.db.list_reminders_by_tag(user_id, tag["id"])
-                tasks_timestamps = [parse_datetime(task["due_time"]) for task in tasks]
+                tasks_timestamps = [parse_due_time(task["due_time"]) for task in tasks]
                 tasks_timestamps.sort()
                 for i in range(len(tasks_timestamps) - 1):
                     if tasks_timestamps[i] <= datetime.now():
@@ -177,13 +194,13 @@ class ReminderBot:
                         user_id=user.id,
                         text=task['text'],
                         tag_id=tag,
-                        due_time=task["time"]
+                        due_time=parse_datetime(task["time"])
                     )
 
             keyboard = []
             unconfirmed_reminders = self.db.list_unconfirmed_reminders(user.id)
             for unconfirmed_reminder in unconfirmed_reminders:
-                text = f"{unconfirmed_reminder["tag_id"]} - {unconfirmed_reminder['text']} ({short_format_datetime(parse_datetime(unconfirmed_reminder['due_time']))})"
+                text = f"{short_format_datetime(parse_due_time(unconfirmed_reminder['due_time']))} {unconfirmed_reminder['text']} [{unconfirmed_reminder["tag_id"]}]"
                 callback_data = f"confirm_task:{unconfirmed_reminder["id"]}"
                 keyboard.append([InlineKeyboardButton(text, callback_data=callback_data)])
 
@@ -214,7 +231,7 @@ class ReminderBot:
             user_id=query.from_user.id,
             text=task_data['text'],
             tag_id=task_data['tag_id'],
-            due_time=task_data['due_time']
+            due_time=parse_timestamp(task_data['due_time'])
         )
         self.db.delete_unconfirmed_reminder(unconfirmed_task_id)
 
@@ -354,7 +371,7 @@ class ReminderBot:
             return
 
         response = "🏷 Ваши напоминания:\n" + "\n".join(
-            [f"{task['text']} ({short_format_datetime(parse_datetime(task['due_time']))}) [{task['tag_id']}])" for task in tasks]
+            [f"{task['text']} ({short_format_datetime(parse_due_time(task['due_time']))}) [{task['tag_id']}])" for task in tasks]
         )
         await user.send_message(response)
 

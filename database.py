@@ -109,12 +109,12 @@ class Database:
             return []
 
     # Reminders
-    def create_unconfirmed_reminder(self, user_id: int, text: str, due_time: str, tag_id: Optional[int] = None) -> bool:
+    def create_unconfirmed_reminder(self, user_id: int, text: str, due_time: datetime, tag_id: Optional[int] = None) -> bool:
         try:
             self.conn.execute(
                 """INSERT INTO pending_reminders (user_id, text, tag_id, due_time)
                    VALUES (?, ?, ?, ?)""",
-                (user_id, text, tag_id, due_time)
+                (user_id, text, tag_id, due_time.timestamp())
             )
             self.conn.commit()
             return True
@@ -172,12 +172,12 @@ class Database:
 
 
     # Reminders
-    def create_reminder(self, user_id: int, text: str, due_time: str, tag_id: Optional[int] = None) -> bool:
+    def create_reminder(self, user_id: int, text: str, due_time: datetime, tag_id: Optional[int] = None) -> bool:
         try:
             self.conn.execute(
                 """INSERT INTO reminders (user_id, text, tag_id, due_time)
                    VALUES (?, ?, ?, ?)""",
-                (user_id, text, tag_id, due_time)
+                (user_id, text, tag_id, due_time.timestamp())
             )
             self.conn.commit()
             return True
@@ -223,8 +223,9 @@ class Database:
     def get_due_reminders(self, DT_FORMAT) -> List[Dict]:
         try:
             now = datetime.now().strftime(DT_FORMAT)
+            now_timestamp = datetime.now().timestamp()
             rows = self.conn.execute(
-                "SELECT * FROM reminders WHERE due_time <= ? AND is_completed = FALSE", (now,)
+                "SELECT * FROM reminders WHERE (due_time <= ? or due_time <= ?) AND is_completed = FALSE", (now_timestamp, now)
             ).fetchall()
             return [dict(row) for row in rows]
         except sqlite3.Error as e:
