@@ -48,6 +48,31 @@ WEEKDAYS = [
     "Воскресенье"
 ]
 
+SHORT_WEEKDAYS = [
+    "пн",
+    "вт",
+    "ср",
+    "чт",
+    "пт",
+    "сб",
+    "вск"
+]
+
+SHORT_MONTHS = [
+    "янв",
+    "фев",
+    "мар",
+    "апр",
+    "май",
+    "июнь",
+    "июль",
+    "авг",
+    "сен",
+    "окт",
+    "ноя",
+    "дек",
+]
+
 # Валидация времени
 def validate_time(time_str: str) -> bool:
     try:
@@ -79,6 +104,10 @@ def short_format_datetime(datetime_value: datetime) -> str:
         return f"завтра, {datetime_value.strftime("%H:%M")}"
     elif datetime.now().date() + timedelta(days=2) == datetime_value.date():
         return f"послезавтра, {datetime_value.strftime("%H:%M")}"
+    elif datetime.now().date() + timedelta(days=6) <= datetime_value.date():
+        return f"{SHORT_WEEKDAYS[datetime_value.weekday()]}., {datetime_value.strftime("%H:%M")}"
+    elif datetime.now().date().month == datetime_value.date().year:
+        return f"{datetime_value.day} {SHORT_MONTHS[datetime_value.month-1]}, {datetime_value.strftime("%H:%M")}"
     return datetime_value.strftime(DT_FORMAT)
 
 class ReminderBot:
