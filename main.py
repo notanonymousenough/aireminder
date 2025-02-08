@@ -1,6 +1,6 @@
 import asyncio
 import os
-import json
+import yaml
 import sqlite3
 import logging
 import traceback
@@ -139,7 +139,7 @@ class ReminderBot:
         response = await self.yandexgpt.query(system, query)
         logging.info(response)
 
-        return json.loads(strip_markdown.strip_markdown(response).strip("`"))
+        return yaml.safe_load(strip_markdown.strip_markdown(response).strip("`"))
 
     async def ask_llm_plan(self, tags: List[Dict], tasks: Dict, query: str) -> Dict:
         tag_str = ", ".join([f"{t['name']} ({t['start_time']}-{t['end_time']})" for t in tags])
@@ -153,7 +153,7 @@ class ReminderBot:
         response = await self.yandexgpt.query(system, str(tasks_with_query))
         logging.info(response)
 
-        return json.loads(strip_markdown.strip_markdown(response).strip("`"))
+        return yaml.safe_load(strip_markdown.strip_markdown(response).strip("`"))
 
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
