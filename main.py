@@ -331,7 +331,7 @@ class ReminderBot:
         all_tasks = list()
         users = self.db.list_users()
         for db_user in users:
-            tasks = self.db.get_user_tags(db_user["telegram_id"])
+            tasks = self.db.list_uncompleted_reminders(db_user["telegram_id"])
             for task in tasks:
                 all_tasks.append(task)
 
