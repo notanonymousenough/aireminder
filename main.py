@@ -102,8 +102,6 @@ def short_format_datetime(datetime_value: datetime) -> str:
         return f"прошедшее, {datetime_value.strftime("%H:%M")}"
     elif datetime.now().date() + timedelta(days=1) == datetime_value.date():
         return f"завтра, {SHORT_WEEKDAYS[datetime_value.weekday()]}, {datetime_value.strftime("%H:%M")}"
-    elif datetime.now().date() + timedelta(days=2) == datetime_value.date():
-        return f"послезавтра, {SHORT_WEEKDAYS[datetime_value.weekday()]}, {datetime_value.strftime("%H:%M")}"
     elif datetime.now().date() + timedelta(days=6) >= datetime_value.date():
         return f"{SHORT_WEEKDAYS[datetime_value.weekday()]}., {datetime_value.strftime("%H:%M")}"
     elif datetime.now().date().year == datetime_value.date().year:
