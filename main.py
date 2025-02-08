@@ -164,7 +164,7 @@ class ReminderBot:
         tags = self.db.get_user_tags(user.id)+[{"name": "default", "start_time": "00:00", "end_time": "23:59"}]
 
         try:
-            query = update.message.text
+            query = update.message.text.replace("\n", ";")
             tasks_without_time = await self.ask_llm_extract(tags, query)
             tasks = await self.ask_llm_plan(tags, tasks_without_time, query)
             context.user_data['pending_tasks'] = tasks
