@@ -267,7 +267,7 @@ class ReminderBot:
                         found_errors = list(found_errors)
                         found_errors.append("and more...")
                         break
-                    found_errors.add(line[:1000])
+                    found_errors.add(line[:4096])
             if len(found_errors) > 0:
                 err_message = f"Found error in logs:\n{"\n".join(found_errors)}"
                 await self.bot.send_message(chat_id=ADMIN_ID, text=err_message)
@@ -372,7 +372,7 @@ class ReminderBot:
             for task in tasks:
                 all_tasks.append(task)
 
-        response = "🏷 Все напоминания:\n" + "\n".join([str(task) for task in all_tasks])
+        response = "🏷 Все напоминания:\n" + "\n".join([str(task)[:4096] for task in all_tasks])
         await user.send_message(response)
 
 
