@@ -194,6 +194,26 @@ class ReminderBot:
 
         await self.bot.send_message(query.from_user.id, f"Задача {task_data['text']} добавлена!")
 
+    async def reschedule_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        if not self.is_tg_user_allowed(user):
+            return
+        query = update.callback_query
+        task_id = query.data.split(":")[1]
+        reschedule_delta = query.data.split(":")[2]
+        delta = timedelta(minutes=30)
+        if reschedule_delta == "hour":
+            delta = timedelta(hours=1)
+        elif reschedule_delta == "day":
+            delta = timedelta(days=1)
+        elif reschedule_delta == "week":
+            delta = timedelta(weeks=1)
+
+        task_data = self.db.get_reminder(task_id)
+        new_due_dt = datetime.now(SERVER_TIMEZONE) + delta
+        self.db.reschedule(task_id, new_due_dt)
+        await self.bot.send_message(query.from_user.id, f"Задача {task_data['text']} перенесена на {short_format_datetime(new_due_dt)}!")
+
     async def check_reminders(self, context: ContextTypes.DEFAULT_TYPE):
         dt = datetime.now(SERVER_TIMEZONE)
         reminders = self.db.get_due_reminders(dt)
@@ -207,9 +227,19 @@ class ReminderBot:
             assist = ""
             if reminder.get("assist", None) != None and len(reminder["assist"]) > 0:
                 assist = f"\n\n---\n{reminder["assist"]}"
+
+            keyboard = [
+                [
+                    InlineKeyboardButton("через час", callback_data=f"reschedule_task:{reminder["id"]}:hour"),
+                    InlineKeyboardButton("через день", callback_data=f"reschedule_task:{reminder["id"]}:day"),
+                    InlineKeyboardButton("через неделю", callback_data=f"reschedule_task:{reminder["id"]}:week"),
+            ]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
             await self.bot.send_message(
                 chat_id=user['telegram_id'],
-                text=f"⏰ Напоминание: {reminder['text']}{assist}"
+                text=f"⏰ Напоминание: {reminder['text']}{assist}",
+                reply_markup=reply_markup
             )
             self.db.mark_reminder_completed(reminder['id'])
 
@@ -479,6 +509,7 @@ if __name__ == "__main__":
     application.add_handler(CommandHandler("clearlog", bot.call_clear_log))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message))
     application.add_handler(CallbackQueryHandler(bot.confirm_task, pattern="^confirm_task:"))
+    application.add_handler(CallbackQueryHandler(bot.reschedule_task, pattern="^reschedule_task:"))
     application.add_handler(CallbackQueryHandler(bot.list_tags, pattern="^list_tags"))
     application.add_handler(CallbackQueryHandler(bot.list_tasks, pattern="^list_tasks"))
     application.add_handler(CallbackQueryHandler(bot.user_get, pattern="^user_get"))

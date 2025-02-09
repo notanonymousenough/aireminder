@@ -1,6 +1,7 @@
 import logging
 import sqlite3
 from datetime import datetime
+from getpass import fallback_getpass
 from typing import *
 from utils import *
 
@@ -169,6 +170,29 @@ class Database:
         except sqlite3.Error as e:
             logging.error(f"Error get_unconfirmed_reminder reminder: {e}")
             return {}
+
+    def get_reminder(self, task_id: str) -> Dict:
+        try:
+            row = self.conn.execute(
+                """SELECT * FROM reminders where id=?""",
+                (task_id,)
+            ).fetchone()
+            return dict(row)
+        except sqlite3.Error as e:
+            logging.error(f"Error get_reminder reminder: {e}")
+            return {}
+
+    def reschedule(self, task_id: str, new_due_time: datetime) -> bool:
+        try:
+            self.conn.execute(
+                """UPDATE reminders SET is_completed = FALSE, due_time=? WHERE id=?""",
+                (new_due_time.timestamp(), task_id,)
+            )
+            self.conn.commit()
+            return True
+        except sqlite3.Error as e:
+            logging.error(f"Error reschedule reminder: {e}")
+            return False
 
 
 
