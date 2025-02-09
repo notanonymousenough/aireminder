@@ -214,7 +214,7 @@ class ReminderBot:
         reminders = self.db.get_due_reminders(dt)
         reminders_per_user = dict()
         for reminder in reminders:
-            reminders_per_user.get(reminder["user_id"], []).append(reminder)
+            reminders_per_user[reminder["user_id"]] = reminders_per_user.get(reminder["user_id"], []) + [reminder,]
 
         for user_id, user_reminders in reminders_per_user.items():
             user = self.db.get_user(user_id)
