@@ -193,8 +193,14 @@ class ReminderBot:
         await self.bot.send_message(query.from_user.id, f"Задача {task_data['text']} добавлена!")
 
     async def check_reminders(self, context: ContextTypes.DEFAULT_TYPE):
-        reminders = self.db.get_due_reminders(datetime.now(SERVER_TIMEZONE))
+        dt = datetime.now(SERVER_TIMEZONE)
+        reminders = self.db.get_due_reminders(dt)
         for reminder in reminders:
+            if parse_due_time(reminder["due_time"]) > dt:
+                err_message = f"Trying to send {str(reminder)} which due_time is more than now {str(dt)}"
+                logging.error(err_message)
+                await self.bot.send_message(chat_id=ADMIN_ID, text=err_message)
+                continue
             user = self.db.get_user(reminder['user_id'])
             await self.bot.send_message(
                 chat_id=user['telegram_id'],
