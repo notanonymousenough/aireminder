@@ -373,6 +373,8 @@ class ReminderBot:
             for task in tasks:
                 all_tasks.append(task)
 
+        if self.db_tasks_listing_page >= len(all_tasks):
+            self.db_tasks_listing_page = 0
         response = "🏷 Все напоминания:\n" + "\n".join([str(task) for task in all_tasks[self.db_tasks_listing_page*5:(self.db_tasks_listing_page+1)*5]])
         self.db_tasks_listing_page += 1
         await user.send_message(response)
