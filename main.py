@@ -96,7 +96,7 @@ class ReminderBot:
 
         if self.user_is_admin(self.db.get_user(user.id)):
             await self.bot.send_message(user.id,
-                                        "VIP команды: /allow, /ban, /list, /dbtasks, /monitor, /clearlog")
+                                        "VIP команды: /allow, /ban, /list, /dbtasks, /monitor, /getlog, /clearlog")
 
         await self.bot.send_message(user.id,
         "/newtag <НазваниеТега> <НачалоПланирования> <КонецПланирования>")
@@ -251,10 +251,24 @@ class ReminderBot:
         if not self.user_is_admin(self.db.get_user(user.id)):
             return
 
+        await self.bot.send_message(chat_id=user.id, text="Saving log...")
+        await self.call_get_log(update, context)
+
         with open("main.log", "r+") as f:
             f.truncate(0)
-
         await self.bot.send_message(chat_id=user.id, text="Clearing log is complete")
+
+    async def call_get_log(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        if not self.is_tg_user_allowed(user):
+            return
+        if not self.user_is_admin(self.db.get_user(user.id)):
+            return
+
+        try:
+            await self.bot.send_document(chat_id=user.id, document="main.log")
+        except Exception as e:
+            await self.bot.send_message(chat_id=user.id, text=f"error while sending log: {str(e)}")
 
 
     async def create_tag(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -417,6 +431,7 @@ if __name__ == "__main__":
     application.add_handler(CommandHandler("list", bot.user_list))
     application.add_handler(CommandHandler("dbtasks", bot.db_tasks_list))
     application.add_handler(CommandHandler("monitor", bot.call_monitor))
+    application.add_handler(CommandHandler("getlog", bot.call_get_log))
     application.add_handler(CommandHandler("clearlog", bot.call_clear_log))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message))
     application.add_handler(CallbackQueryHandler(bot.confirm_task, pattern="^confirm_task:"))
