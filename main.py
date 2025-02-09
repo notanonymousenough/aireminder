@@ -96,7 +96,7 @@ class ReminderBot:
 
         if self.user_is_admin(self.db.get_user(user.id)):
             await self.bot.send_message(user.id,
-                                        "VIP команды: /allow, /ban, /list, /dbtasks")
+                                        "VIP команды: /allow, /ban, /list, /dbtasks, /monitor, /clearlog")
 
         await self.bot.send_message(user.id,
         "/newtag <НазваниеТега> <НачалоПланирования> <КонецПланирования>")
@@ -219,13 +219,43 @@ class ReminderBot:
                 continue
 
         with open("main.log", "r+") as f:
-            for line in f.readlines():
+            found_errors = set()
+            for line in f.readlines()[1:]:
                 lline = line.lower()
                 if "error" in lline or "exception" in lline or "fail" in lline:
-                    err_message = f"Found error in logs {line}"
-                    await self.bot.send_message(chat_id=ADMIN_ID, text=err_message)
-                    return  # do not truncate
+                    if len(found_errors) > 10:
+                        found_errors = list(found_errors)
+                        found_errors.append("and more...")
+                        break
+                    found_errors.add(line[:1000])
+            if len(found_errors) > 0:
+                err_message = f"Found error in logs:\n{"\n".join(found_errors)}"
+                await self.bot.send_message(chat_id=ADMIN_ID, text=err_message)
+                return  # do not truncate
             f.truncate(0)
+
+    async def call_monitor(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        if not self.is_tg_user_allowed(user):
+            return
+        if not self.user_is_admin(self.db.get_user(user.id)):
+            return
+
+        await self.monitor(context)
+        await self.bot.send_message(chat_id=user.id, text="Monitor is complete")
+
+    async def call_clear_log(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        if not self.is_tg_user_allowed(user):
+            return
+        if not self.user_is_admin(self.db.get_user(user.id)):
+            return
+
+        with open("main.log", "r+") as f:
+            f.truncate(0)
+
+        await self.bot.send_message(chat_id=user.id, text="Clearing log is complete")
+
 
     async def create_tag(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
@@ -386,6 +416,8 @@ if __name__ == "__main__":
     application.add_handler(CommandHandler("ban", bot.disallow))
     application.add_handler(CommandHandler("list", bot.user_list))
     application.add_handler(CommandHandler("dbtasks", bot.db_tasks_list))
+    application.add_handler(CommandHandler("monitor", bot.call_monitor))
+    application.add_handler(CommandHandler("clearlog", bot.call_clear_log))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message))
     application.add_handler(CallbackQueryHandler(bot.confirm_task, pattern="^confirm_task:"))
     application.add_handler(CallbackQueryHandler(bot.list_tags, pattern="^list_tags"))
