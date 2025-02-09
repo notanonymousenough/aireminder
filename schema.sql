@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT,
     is_admin BOOLEAN DEFAULT FALSE,
     is_allowed BOOLEAN DEFAULT FALSE,
+    timezone INTEGER,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -23,6 +24,7 @@ CREATE TABLE IF NOT EXISTS reminders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
     text TEXT NOT NULL,
+    assist TEXT,
     tag_id INTEGER,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     due_time TIMESTAMP NOT NULL,
@@ -38,12 +40,7 @@ CREATE TABLE IF NOT EXISTS pending_reminders (
     text TEXT NOT NULL,
     tag_id INTEGER,
     due_time TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE SET NULL
 );
-
---CREATE TABLE IF NOT EXISTS user_timezone (
---    id INTEGER PRIMARY KEY AUTOINCREMENT,
---    user_id INTEGER UNIQUE NOT NULL,
---    timezone INTEGER
---);

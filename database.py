@@ -231,6 +231,18 @@ class Database:
             logging.error(f"Error getting due reminders: {e}")
             return []
 
+    def update_task_assist(self, task_id, assist) -> bool:
+        try:
+            self.conn.execute(
+                "UPDATE reminders SET assist = ? WHERE id = ?",
+                (assist, task_id)
+            )
+            self.conn.commit()
+            return True
+        except sqlite3.Error as e:
+            logging.error(f"Error updating assist: {e}")
+            return False
+
     # Admin functions
     def add_pending_user(self, telegram_id: int, full_name: str, username: str) -> bool:
         try:

@@ -203,11 +203,36 @@ class ReminderBot:
                 await self.bot.send_message(chat_id=ADMIN_ID, text=err_message)
                 continue
             user = self.db.get_user(reminder['user_id'])
+            assist = ""
+            if reminder.get("assist", None) != None and len(reminder["assist"]) > 0:
+                assist = f"\n\n---\n{reminder["assist"]}"
             await self.bot.send_message(
                 chat_id=user['telegram_id'],
-                text=f"⏰ Напоминание: {reminder['text']}"
+                text=f"⏰ Напоминание: {reminder['text']}{assist}"
             )
             self.db.mark_reminder_completed(reminder['id'])
+
+    async def ask_llm_assist(self, query: str) -> Dict:
+        response_format = '{"hasAssist": bool, "assist": "text"}'
+        system = f"Ты - умный ассистент пользователя, помогающий ему выполнять свои задачи. Подумай, какая информация может помочь пользователю выполнить задачу и составь небольшой текст размером в один параграф с конкретными пунктами-советами и небольшим вступлением, чтобы пользователь не испугался, а понял, что ты помогаешь. Разделяй советы новой строкой. Учитывай, что пользователь и сам бы справился с задачей, он умный и знает что делать, но действительно полезный совет не помешал бы ему. Будь вежливым и дружелюбным. Если задача слишком простая и супер интересных советов нет - вместо этого просто подбодри его, но не объясняй очевидные вещи. На вход дается текст задачи пользователя. В ответе предоставь только валидный JSON в формате {response_format} без пояснений"
+
+        logging.info(system)
+        logging.info(query)
+        response = await self.yandexgpt.query(system, str(query))
+        logging.info(response)
+
+        return yaml.safe_load(strip_markdown.strip_markdown(response).strip("`"))
+
+    async def assist(self, context: ContextTypes.DEFAULT_TYPE):
+        dt = datetime.now(SERVER_TIMEZONE) + timedelta(hours=5)
+        reminders = self.db.get_due_reminders(dt)
+        for reminder in reminders:
+            if reminder.get("assist", None) is not None:
+                continue
+            assist = await self.ask_llm_assist(reminder["text"])
+            if type(assist) != dict or assist.get("hasAssist", False) != True or len(str(assist.get("assist", ""))) == 0:
+                continue
+            self.db.update_task_assist(reminder["id"], assist["assist"])
 
     async def daily(self, context: ContextTypes.DEFAULT_TYPE):
         dt = datetime.now(SERVER_TIMEZONE).replace(hour=23, minute=59, second=59)
@@ -456,9 +481,12 @@ if __name__ == "__main__":
     application.add_handler(CallbackQueryHandler(bot.help, pattern="^help"))
 
     # Запускаем проверку напоминаний в фоне
-    application.job_queue.run_repeating(bot.check_reminders, interval=60)
+    application.job_queue.run_repeating(bot.check_reminders, interval=30)
     # Мониторинг
     application.job_queue.run_repeating(bot.monitor, interval=1800)
-    application.job_queue.run_daily(bot.daily, time=time(7, 0))
+    # Дневной скрипт
+    application.job_queue.run_daily(bot.daily, time=time(7, 00, tzinfo=SERVER_TIMEZONE))
+    # Ассистент
+    application.job_queue.run_repeating(bot.assist, interval=300)
 
     application.run_polling()
