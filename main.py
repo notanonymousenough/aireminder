@@ -63,7 +63,7 @@ class ReminderBot:
         for tag in self.db.get_user_tags(user_id):
             if tag["name"] == tag_name:
                 tasks = self.db.list_reminders_by_tag(user_id, tag["id"])
-                tasks_timestamps = [parse_due_time(task["due_time"]) for task in tasks]
+                tasks_timestamps = [parse_timestamp(task["due_time"]) for task in tasks]
                 tasks_timestamps.sort()
                 for i in range(len(tasks_timestamps) - 1):
                     if tasks_timestamps[i] <= datetime.now(SERVER_TIMEZONE):
@@ -155,7 +155,7 @@ class ReminderBot:
             keyboard = []
             unconfirmed_reminders = self.db.list_unconfirmed_reminders(user.id)
             for unconfirmed_reminder in unconfirmed_reminders:
-                text = f"{short_format_datetime(parse_due_time(unconfirmed_reminder['due_time']))} {unconfirmed_reminder['text']} [{unconfirmed_reminder["tag_id"]}]"
+                text = f"{short_format_datetime(parse_timestamp(unconfirmed_reminder['due_time']))} {unconfirmed_reminder['text']} [{unconfirmed_reminder["tag_id"]}]"
                 callback_data = f"confirm_task:{unconfirmed_reminder["id"]}"
                 keyboard.append([InlineKeyboardButton(text, callback_data=callback_data)])
 
@@ -196,7 +196,7 @@ class ReminderBot:
         dt = datetime.now(SERVER_TIMEZONE)
         reminders = self.db.get_due_reminders(dt)
         for reminder in reminders:
-            if parse_due_time(reminder["due_time"]) > dt:
+            if parse_timestamp(reminder["due_time"]) > dt:
                 err_message = f"Trying to send {str(reminder)} which due_time is more than now {str(dt)}"
                 logging.error(err_message)
                 await self.bot.send_message(chat_id=ADMIN_ID, text=err_message)
@@ -350,7 +350,7 @@ class ReminderBot:
             return
 
         response = "🏷 Ваши напоминания:\n" + "\n".join(
-            [f"{task['text']} ({short_format_datetime(parse_due_time(task['due_time']))}) [{task['tag_id']}])" for task in tasks]
+            [f"{task['text']} ({short_format_datetime(parse_timestamp(task['due_time']))}) [{task['tag_id']}])" for task in tasks]
         )
         await user.send_message(response)
 

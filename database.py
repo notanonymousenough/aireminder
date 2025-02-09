@@ -203,7 +203,7 @@ class Database:
     def list_uncompleted_reminders(self, user_id: int) -> List[Dict]:
         try:
             rows = self.conn.execute(
-                "SELECT * FROM reminders WHERE is_completed = FALSE and user_id=?", (user_id,)
+                "SELECT * FROM reminders WHERE is_completed = FALSE and user_id=? ORDER BY due_time ASC", (user_id,)
             ).fetchall()
             return [dict(row) for row in rows]
         except sqlite3.Error as e:
