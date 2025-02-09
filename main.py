@@ -1,10 +1,11 @@
 import asyncio
 import os
+
 import yaml
 import sqlite3
 import logging
 import traceback
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time
 from typing import Dict, List, Optional
 import strip_markdown
 from dotenv import load_dotenv
@@ -207,6 +208,20 @@ class ReminderBot:
                 text=f"⏰ Напоминание: {reminder['text']}"
             )
             self.db.mark_reminder_completed(reminder['id'])
+
+    async def daily(self, context: ContextTypes.DEFAULT_TYPE):
+        dt = datetime.now(SERVER_TIMEZONE).replace(hour=23, minute=59, second=59)
+        reminders = self.db.get_due_reminders(dt)
+        reminders_per_user = dict()
+        for reminder in reminders:
+            reminders_per_user.get(reminder["user_id"], []).append(reminder)
+
+        for user_id, user_reminders in reminders_per_user.items():
+            user = self.db.get_user(user_id)
+            await self.bot.send_message(
+                chat_id=user['telegram_id'],
+                text=f"Доброе утро! Сегодня тебе предстоит:\n{"\n".join([f"{user_reminder['text']} - ({short_format_datetime(parse_timestamp(user_reminder['due_time']))}) [{user_reminder['tag_id']}])" for user_reminder in user_reminders])}"
+            )
 
     async def monitor(self, context: ContextTypes.DEFAULT_TYPE):
         dt = datetime.now(SERVER_TIMEZONE)
@@ -444,5 +459,6 @@ if __name__ == "__main__":
     application.job_queue.run_repeating(bot.check_reminders, interval=60)
     # Мониторинг
     application.job_queue.run_repeating(bot.monitor, interval=1800)
+    application.job_queue.run_daily(bot.daily, time=time(7, 0))
 
     application.run_polling()
