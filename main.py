@@ -27,88 +27,14 @@ from telegram.ext import (
 from deepseek_api import DeepSeekAPI  # Ваш модуль для работы с DeepSeek
 from yandexgpt_api import YandexGptAPI
 from database import Database
+from config import *
+from utils import *
 
 # Конфигурация
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 YC_FOLDER_ID = os.getenv("YC_FOLDER_ID")
 YC_SECRET_ID = os.getenv("YC_SECRET_ID")
-DB_NAME = "reminders.db"
-ALLOWED_USERS = [313049106]  # ID разрешенных пользователей
-ADMIN_ID = 313049106  # ID администратора
-DT_FORMAT = "%Y/%m/%d, %H:%M"
-OPTIMAL_TASKS_DELTA = timedelta(hours=1)
-WEEKDAYS = [
-    "Понедельник",
-    "Вторник",
-    "Среда",
-    "Четверг",
-    "Пятница",
-    "Суббота",
-    "Воскресенье"
-]
-
-SHORT_WEEKDAYS = [
-    "пн",
-    "вт",
-    "ср",
-    "чт",
-    "пт",
-    "сб",
-    "вск"
-]
-
-SHORT_MONTHS = [
-    "янв",
-    "фев",
-    "мар",
-    "апр",
-    "май",
-    "июнь",
-    "июль",
-    "авг",
-    "сен",
-    "окт",
-    "ноя",
-    "дек",
-]
-
-SERVER_TIMEZONE = timezone(timedelta(hours=3))
-
-# Валидация времени
-def validate_time(time_str: str) -> bool:
-    try:
-        datetime.strptime(time_str, "%H:%M")
-        return True
-    except ValueError:
-        return False
-
-def parse_datetime(datetime_str: str) -> datetime:
-    return datetime.strptime(str(datetime_str), DT_FORMAT)
-
-def parse_timestamp(timestamp_str) -> datetime:
-    if type(timestamp_str) == str:
-        timestamp_str = int(timestamp_str)
-    return datetime.fromtimestamp(timestamp_str)
-
-def parse_due_time(due_time) -> datetime:
-    try:
-        return parse_timestamp(due_time)
-    except:
-        return parse_datetime(due_time)
-
-def short_format_datetime(datetime_value: datetime) -> str:
-    if datetime.now(SERVER_TIMEZONE).date() == datetime_value.date():
-        return f"сегодня, {SHORT_WEEKDAYS[datetime_value.weekday()]}, {datetime_value.strftime("%H:%M")}"
-    elif datetime.now(SERVER_TIMEZONE).date() > datetime_value.date():
-        return f"прошедшее, {datetime_value.strftime("%H:%M")}"
-    elif datetime.now(SERVER_TIMEZONE).date() + timedelta(days=1) >= datetime_value.date():
-        return f"завтра, {SHORT_WEEKDAYS[datetime_value.weekday()]}, {datetime_value.strftime("%H:%M")}"
-    elif datetime.now(SERVER_TIMEZONE).date() + timedelta(days=6) >= datetime_value.date():
-        return f"{SHORT_WEEKDAYS[datetime_value.weekday()]}., {datetime_value.strftime("%H:%M")}"
-    elif datetime.now(SERVER_TIMEZONE).date().year == datetime_value.date().year:
-        return f"{datetime_value.day} {SHORT_MONTHS[datetime_value.month-1]}, {datetime_value.strftime("%H:%M")}"
-    return datetime_value.strftime(DT_FORMAT)
 
 class ReminderBot:
     def __init__(self):

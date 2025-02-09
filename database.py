@@ -2,6 +2,7 @@ import logging
 import sqlite3
 from datetime import datetime
 from typing import *
+from utils import *
 
 
 # Класс для работы с базой данных
@@ -220,10 +221,10 @@ class Database:
             logging.error(f"Error listing reminder: {e}")
             return False
 
-    def get_due_reminders(self, dt: datetime, DT_FORMAT) -> List[Dict]:
+    def get_due_reminders(self, dt: datetime) -> List[Dict]:
         try:
             rows = self.conn.execute(
-                "SELECT * FROM reminders WHERE (due_time <= ? or due_time <= ?) AND is_completed = FALSE", (dt.timestamp(), dt.strftime(DT_FORMAT))
+                "SELECT * FROM reminders WHERE is_completed = FALSE AND due_time <= ?", (dt.timestamp(),)
             ).fetchall()
             return [dict(row) for row in rows]
         except sqlite3.Error as e:
