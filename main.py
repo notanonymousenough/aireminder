@@ -267,7 +267,7 @@ class ReminderBot:
         await self.bot.send_message(query.from_user.id, f"Задача {task_data['text']} добавлена!")
 
     async def check_reminders(self, context: ContextTypes.DEFAULT_TYPE):
-        reminders = self.db.get_due_reminders(DT_FORMAT, SERVER_TIMEZONE)
+        reminders = self.db.get_due_reminders(datetime.now(SERVER_TIMEZONE), DT_FORMAT)
         for reminder in reminders:
             user = self.db.get_user(reminder['user_id'])
             await self.bot.send_message(
