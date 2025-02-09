@@ -15,13 +15,8 @@ def parse_datetime(datetime_str: str) -> datetime:
 def parse_timestamp(timestamp_str) -> datetime:
     if type(timestamp_str) == str:
         timestamp_str = int(timestamp_str)
-    return datetime.fromtimestamp(timestamp_str)
+    return datetime.fromtimestamp(timestamp_str, tz=SERVER_TIMEZONE)
 
-def parse_due_time(due_time) -> datetime:
-    try:
-        return parse_timestamp(due_time)
-    except:
-        return parse_datetime(due_time)
 
 def short_format_datetime(datetime_value: datetime) -> str:
     if datetime.now(SERVER_TIMEZONE).date() == datetime_value.date():

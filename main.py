@@ -208,6 +208,25 @@ class ReminderBot:
             )
             self.db.mark_reminder_completed(reminder['id'])
 
+    async def monitor(self, context: ContextTypes.DEFAULT_TYPE):
+        dt = datetime.now(SERVER_TIMEZONE)
+        reminders = self.db.get_due_reminders(dt)
+        for reminder in reminders:
+            if dt - parse_timestamp(reminder["due_time"]) > timedelta(minutes=5):
+                err_message = f"Not sending {str(reminder)} for 5 minutes! {str(dt)}"
+                logging.error(err_message)
+                await self.bot.send_message(chat_id=ADMIN_ID, text=err_message)
+                continue
+
+        with open("main.log", "r+") as f:
+            for line in f.readlines():
+                lline = line.lower()
+                if "error" in lline or "exception" in lline or "fail" in lline:
+                    err_message = f"Found error in logs {line}"
+                    await self.bot.send_message(chat_id=ADMIN_ID, text=err_message)
+                    return  # do not truncate
+            f.truncate(0)
+
     async def create_tag(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         if not self.is_tg_user_allowed(user):
@@ -376,5 +395,7 @@ if __name__ == "__main__":
 
     # Запускаем проверку напоминаний в фоне
     application.job_queue.run_repeating(bot.check_reminders, interval=60)
+    # Мониторинг
+    application.job_queue.run_repeating(bot.monitor, interval=1800)
 
     application.run_polling()
