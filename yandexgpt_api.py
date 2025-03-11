@@ -19,7 +19,7 @@ class YandexGptAPI:
                 "text": prompt,
             },
         ]
-        resp = self.sdk.models.completions("yandexgpt").configure(temperature=0.5).run(messages)
+        resp = self.sdk.models.completions(model_name="yandexgpt", model_version="rc").configure(temperature=0.5).run(messages)
         for alternative in resp.alternatives:
             if alternative.role == "assistant":
                 return alternative.text
