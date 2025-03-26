@@ -517,7 +517,7 @@ class ReminderBot:
         if update.callback_query is not None:
             await self.bot.answer_callback_query(update.callback_query.id)
 
-    async def set_commands(self):
+    async def set_commands(self, context: ContextTypes.DEFAULT_TYPE):
         user_commands = [
             BotCommand("start", "Старт"),
             BotCommand("help", "Помощь"),
@@ -572,5 +572,7 @@ if __name__ == "__main__":
     application.job_queue.run_daily(bot.daily, time=time(7, 00, tzinfo=SERVER_TIMEZONE))
     # Ассистент
     application.job_queue.run_repeating(bot.assist, interval=300)
+    # Commands
+    application.job_queue.run_once(bot.set_commands, 0)
 
     application.run_polling()
