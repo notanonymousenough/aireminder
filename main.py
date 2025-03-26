@@ -204,10 +204,24 @@ class ReminderBot:
         delta = timedelta(minutes=30)
         if reschedule_delta == "hour":
             delta = timedelta(hours=1)
+        elif reschedule_delta == "8hours":
+            delta = timedelta(hours=8)
         elif reschedule_delta == "day":
             delta = timedelta(days=1)
+        elif reschedule_delta == "2days":
+            delta = timedelta(days=2)
         elif reschedule_delta == "week":
             delta = timedelta(weeks=1)
+        elif reschedule_delta == "month":
+            delta = timedelta(days=31)
+        elif reschedule_delta == "3months":
+            delta = timedelta(days=93)
+        elif reschedule_delta == "evening":
+            while (datetime.now(SERVER_TIMEZONE) + delta).hour <= 19:
+                delta += timedelta(hours=1)
+        elif reschedule_delta == "weekends":
+            while (datetime.now(SERVER_TIMEZONE) + delta).weekday() <= 4:
+                delta += timedelta(days=1)
 
         task_data = self.db.get_reminder(task_id)
         new_due_dt = datetime.now(SERVER_TIMEZONE) + delta
@@ -233,7 +247,18 @@ class ReminderBot:
                     InlineKeyboardButton("через час", callback_data=f"reschedule_task:{reminder["id"]}:hour"),
                     InlineKeyboardButton("через день", callback_data=f"reschedule_task:{reminder["id"]}:day"),
                     InlineKeyboardButton("через неделю", callback_data=f"reschedule_task:{reminder["id"]}:week"),
-            ]]
+                ],
+                [
+                    InlineKeyboardButton("через 8 часов", callback_data=f"reschedule_task:{reminder["id"]}:8hours"),
+                    InlineKeyboardButton("через 2 дня", callback_data=f"reschedule_task:{reminder["id"]}:2days"),
+                    InlineKeyboardButton("через месяц", callback_data=f"reschedule_task:{reminder["id"]}:month"),
+                ],
+                [
+                    InlineKeyboardButton("через 3 месяца", callback_data=f"reschedule_task:{reminder["id"]}:3months"),
+                    InlineKeyboardButton("вечером", callback_data=f"reschedule_task:{reminder["id"]}:evening"),
+                    InlineKeyboardButton("в выходные", callback_data=f"reschedule_task:{reminder["id"]}:weekends"),
+                ],
+            ]
             reply_markup = InlineKeyboardMarkup(keyboard)
 
             await self.bot.send_message(
