@@ -16,7 +16,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import telegram
 from pycparser.ply.yacc import token
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot, BotCommand, BotCommandScopeDefault, \
+    BotCommandScopeChat
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -90,18 +91,6 @@ class ReminderBot:
             "Добро пожаловать! Выберите действие:",
             reply_markup=reply_markup
         )
-
-    async def help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user = update.effective_user
-        if not self.is_tg_user_allowed(user):
-            return
-
-        if self.user_is_admin(self.db.get_user(user.id)):
-            await self.bot.send_message(user.id,
-                                        "VIP команды: /allow, /ban, /list, /dbtasks, /monitor, /getlog, /clearlog")
-
-        await self.bot.send_message(user.id,
-        "/newtag <НазваниеТега> <НачалоПланирования> <КонецПланирования>")
 
     async def ask_llm_extract(self, tags: List[Dict], query: str) -> Dict:
         tag_str = ", ".join([f"{t['name']}" for t in tags])
@@ -193,6 +182,7 @@ class ReminderBot:
         self.db.delete_unconfirmed_reminder(unconfirmed_task_id)
 
         await self.bot.send_message(query.from_user.id, f"Задача {task_data['text']} добавлена!")
+        await self.bot.answer_callback_query(update.callback_query.id)
 
     async def reschedule_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
@@ -227,6 +217,7 @@ class ReminderBot:
         new_due_dt = datetime.now(SERVER_TIMEZONE) + delta
         self.db.reschedule(task_id, new_due_dt)
         await self.bot.send_message(query.from_user.id, f"Задача {task_data['text']} перенесена на {short_format_datetime(new_due_dt)}!")
+        await self.bot.answer_callback_query(update.callback_query.id)
 
     async def check_reminders(self, context: ContextTypes.DEFAULT_TYPE):
         dt = datetime.now(SERVER_TIMEZONE)
@@ -466,6 +457,7 @@ class ReminderBot:
         telegram_id = query.data.split(":")[1]
         db_user = self.db.get_user(telegram_id)
         await self.bot.send_message(user.id, str(db_user))
+        await self.bot.answer_callback_query(update.callback_query.id)
 
     async def disallow(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
@@ -500,6 +492,7 @@ class ReminderBot:
             [f"{tag['name']} ({tag['start_time']}-{tag['end_time']})" for tag in tags]
         )
         await user.send_message(response)
+        await self.bot.answer_callback_query(update.callback_query.id)
 
     async def list_tasks(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
@@ -515,16 +508,45 @@ class ReminderBot:
             [f"{task['text']} ({short_format_datetime(parse_timestamp(task['due_time']))}) [{task['tag_id']}])" for task in tasks]
         )
         await user.send_message(response)
+        await self.bot.answer_callback_query(update.callback_query.id)
 
+    async def help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        await self.bot.send_message(user.id,
+        "Привет! Это твой умный помощник в планировании. Напиши мне что и когда тебе нужно запланировать в свободном формате, а я превращу твой поток сознания в оцифрованное напоминание ;)")
+        if update.callback_query is not None:
+            await self.bot.answer_callback_query(update.callback_query.id)
+
+    async def set_commands(self):
+        user_commands = [
+            BotCommand("start", "Старт"),
+            BotCommand("help", "Помощь"),
+            BotCommand("newtag", "Добавить тег"),
+        ]
+
+        admin_commands = user_commands + [
+            BotCommand("allow", "Старт"),
+            BotCommand("ban", "Бан"),
+            BotCommand("list", "Список пользователей"),
+            BotCommand("dbtasks", "Напоминания из БД"),
+            BotCommand("monitor", "Состояние бота"),
+            BotCommand("getlog", "Получить логи"),
+            BotCommand("clearlog", "Очистить логи"),
+        ]
+        await self.bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
+        await self.bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=ADMIN_ID))
 
 if __name__ == "__main__":
     bot = ReminderBot()
 
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
+    # user commands
     application.add_handler(CommandHandler("start", bot.start))
     application.add_handler(CommandHandler("newtag", bot.create_tag))
     application.add_handler(CommandHandler("help", bot.help))
+
+    # admin commands
     application.add_handler(CommandHandler("allow", bot.allow))
     application.add_handler(CommandHandler("ban", bot.disallow))
     application.add_handler(CommandHandler("list", bot.user_list))
@@ -532,6 +554,8 @@ if __name__ == "__main__":
     application.add_handler(CommandHandler("monitor", bot.call_monitor))
     application.add_handler(CommandHandler("getlog", bot.call_get_log))
     application.add_handler(CommandHandler("clearlog", bot.call_clear_log))
+
+    # pattern handlers
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message))
     application.add_handler(CallbackQueryHandler(bot.confirm_task, pattern="^confirm_task:"))
     application.add_handler(CallbackQueryHandler(bot.reschedule_task, pattern="^reschedule_task:"))
