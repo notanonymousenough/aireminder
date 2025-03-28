@@ -335,8 +335,7 @@ class ReminderBot:
             grouped_tasks = self._group_unconfirmed_tasks_by_date(unconfirmed_reminders)
 
             for date_group, tasks in grouped_tasks.items():
-                # Добавляем заголовок даты
-                keyboard.append([InlineKeyboardButton(f"📅 {date_group}", callback_data="date_header")])
+                keyboard.append([InlineKeyboardButton(f"📅 {date_group}", callback_data="ignore")])  # Use ignore to bypass
 
                 for task in tasks:
                     due_time = parse_timestamp(task['due_time'])
@@ -419,11 +418,11 @@ class ReminderBot:
             if unconfirmed_task_id == "remove":
                 deleted_count = self.db.delete_unconfirmed_reminders(query.from_user.id)
                 logger.info(f"Удалено {deleted_count} неподтвержденных напоминаний для пользователя {user.id}")
-                await self.bot.answer_callback_query(query.id, text="Оставшиеся напоминания отменены")
+                await self.bot.answer_callback_query(query.id, text=f"Отменено {deleted_count} напоминаний")
 
                 # Обновляем сообщение, чтобы удалить кнопки
                 if query.message:
-                    await query.message.edit_text("Напоминания отменены")
+                    await query.message.edit_text(f"Отменено {deleted_count} напоминаний")
                 return
 
             task_data = self.db.get_unconfirmed_reminder(unconfirmed_task_id)
@@ -474,6 +473,22 @@ class ReminderBot:
 
             await self.bot.answer_callback_query(query.id)
 
+        except Exception as e:
+            logger.error(f"Ошибка при подтверждении задачи: {e}")
+            await self.bot.answer_callback_query(query.id, text="Произошла ошибка")
+
+    async def ignore(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Обрабатывает нулевой колбэк."""
+        user = update.effective_user
+        if not self.is_tg_user_allowed(user):
+            logger.warning(f"Попытка нулевого колбэка от неразрешенного пользователя: {user.id}")
+            return
+
+        query = update.callback_query
+
+        try:
+            await self.bot.answer_callback_query(query.id)
+            return
         except Exception as e:
             logger.error(f"Ошибка при подтверждении задачи: {e}")
             await self.bot.answer_callback_query(query.id, text="Произошла ошибка")
@@ -1707,6 +1722,7 @@ def main() -> None:
 
         # Обработчики сообщений и коллбэков
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message))
+        application.add_handler(CallbackQueryHandler(bot.ignore, pattern="^ignore"))
         application.add_handler(CallbackQueryHandler(bot.confirm_task, pattern="^confirm_task:"))
         application.add_handler(CallbackQueryHandler(bot.reschedule_task, pattern="^reschedule_task:"))
         application.add_handler(CallbackQueryHandler(bot.complete_task, pattern="^complete_task:"))

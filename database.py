@@ -138,12 +138,12 @@ class Database:
 
     def delete_unconfirmed_reminders(self, user_id: int):
         try:
-            self.conn.execute(
+            count = self.conn.execute(
                 """DELETE FROM pending_reminders where user_id=?""",
                 (user_id,)
-            )
+            ).rowcount
             self.conn.commit()
-            return True
+            return count
         except sqlite3.Error as e:
             logging.error(f"Error delete_unconfirmed_reminders reminder: {e}")
             return False
