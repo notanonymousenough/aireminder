@@ -30,3 +30,18 @@ def short_format_datetime(datetime_value: datetime) -> str:
     elif datetime.now(SERVER_TIMEZONE).date().year == datetime_value.date().year:
         return f"{datetime_value.day} {SHORT_MONTHS[datetime_value.month-1]}, {datetime_value.strftime("%H:%M")}"
     return datetime_value.strftime(DT_FORMAT)
+
+def format_date(dt):
+    """Форматирует дату в удобный для чтения вид.
+
+    Args:
+        dt: Объект datetime
+
+    Returns:
+        Отформатированная строка даты
+    """
+    months = [
+        "января", "февраля", "марта", "апреля", "мая", "июня",
+        "июля", "августа", "сентября", "октября", "ноября", "декабря"
+    ]
+    return f"{dt.day} {months[dt.month - 1]}"

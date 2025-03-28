@@ -4,11 +4,12 @@ import yaml
 import logging
 import traceback
 from datetime import datetime, timedelta, timezone, time
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Union, Tuple
 import strip_markdown
 from dotenv import load_dotenv
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from cachetools import TTLCache
 
 import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot, BotCommand, BotCommandScopeDefault, \
@@ -19,7 +20,8 @@ from telegram.ext import (
     ContextTypes,
     MessageHandler,
     filters,
-    CallbackQueryHandler
+    CallbackQueryHandler,
+    ConversationHandler
 )
 from deepseek_api import DeepSeekAPI
 from yandexgpt_api import YandexGptAPI
@@ -34,7 +36,15 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
+
+# Создаем отдельный обработчик для вывода логов в консоль
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+console_handler.setFormatter(console_formatter)
+
 logger = logging.getLogger(__name__)
+logger.addHandler(console_handler)
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -45,7 +55,6 @@ YC_SECRET_ID = os.getenv("YC_SECRET_ID")
 if not BOT_TOKEN or not YC_FOLDER_ID or not YC_SECRET_ID:
     logger.error("Не указаны обязательные переменные окружения")
     raise EnvironmentError("Отсутствуют обязательные переменные окружения")
-
 
 class ReminderBot:
     """Бот для управления напоминаниями с использованием LLM."""
@@ -58,6 +67,9 @@ class ReminderBot:
         self.scheduler = AsyncIOScheduler()
         self.db_tasks_listing_page = 0
         self.bot = Bot(token=BOT_TOKEN)
+        # Добавляем кэш для часто запрашиваемых данных (TTL = 5 минут)
+        self.user_cache = TTLCache(maxsize=100, ttl=300)
+        self.last_log_position = 0  # Для оптимизации чтения лога
         logger.info("ReminderBot initialized")
 
     def user_is_admin(self, user: Dict[str, Any]) -> bool:
@@ -80,6 +92,11 @@ class ReminderBot:
         Returns:
             True, если пользователю разрешен доступ, иначе False
         """
+        # Сначала проверяем кэш
+        cache_key = f"user_{tg_user.id}"
+        if cache_key in self.user_cache:
+            return self.user_cache[cache_key]
+
         user = self.db.get_user(tg_user.id)
 
         # Регистрация пользователя, если он новый
@@ -92,7 +109,11 @@ class ReminderBot:
             })
             user = self.db.get_user(tg_user.id)
 
-        return user is not None and (user.get("is_allowed", False) or tg_user.id in ALLOWED_USERS)
+        is_allowed = user is not None and (user.get("is_allowed", False) or tg_user.id in ALLOWED_USERS)
+        # Сохраняем результат в кэше
+        self.user_cache[cache_key] = is_allowed
+
+        return is_allowed
 
     def select_nearest_time_for_tag(self, user_id: int, tag_name: str) -> datetime:
         """Вычисляет оптимальное время для нового напоминания.
@@ -128,6 +149,9 @@ class ReminderBot:
         user = update.effective_user
         if not self.is_tg_user_allowed(user):
             logger.warning(f"Попытка доступа от неразрешенного пользователя: {user.id}")
+            await update.message.reply_text(
+                "Извините, у вас нет доступа к этому боту. Обратитесь к администратору."
+            )
             return
 
         keyboard = [
@@ -173,9 +197,19 @@ class ReminderBot:
 
         logger.info(f"LLM extract query: {query}")
         try:
-            response = await self.yandexgpt.query(system, query)
-            logger.info(f"LLM extract response received")
-            return yaml.safe_load(strip_markdown.strip_markdown(response).strip("`"))
+            # Добавляем повторную попытку для повышения надежности
+            for attempt in range(3):
+                try:
+                    response = await self.yandexgpt.query(system, query)
+                    logger.info(f"LLM extract response received")
+                    return yaml.safe_load(strip_markdown.strip_markdown(response).strip("`"))
+                except Exception as e:
+                    if attempt < 2:
+                        logger.warning(
+                            f"Попытка {attempt + 1} извлечения задач из LLM не удалась: {e}. Повторная попытка...")
+                        await asyncio.sleep(1)
+                    else:
+                        raise
         except Exception as e:
             logger.error(f"Ошибка при извлечении задач из LLM: {e}")
             raise
@@ -225,9 +259,19 @@ class ReminderBot:
         tasks_with_query = {"extracted_tasks": extracted_tasks, "user_query": query}
 
         try:
-            response = await self.yandexgpt.query(system, str(tasks_with_query))
-            logger.info(f"LLM plan response received")
-            return yaml.safe_load(strip_markdown.strip_markdown(response).strip("`"))
+            # Добавляем повторную попытку для повышения надежности
+            for attempt in range(3):
+                try:
+                    response = await self.yandexgpt.query(system, str(tasks_with_query))
+                    logger.info(f"LLM plan response received")
+                    return yaml.safe_load(strip_markdown.strip_markdown(response).strip("`"))
+                except Exception as e:
+                    if attempt < 2:
+                        logger.warning(
+                            f"Попытка {attempt + 1} планирования задач через LLM не удалась: {e}. Повторная попытка...")
+                        await asyncio.sleep(1)
+                    else:
+                        raise
         except Exception as e:
             logger.error(f"Ошибка при планировании задач через LLM: {e}")
             raise
@@ -244,9 +288,19 @@ class ReminderBot:
             logger.warning(f"Сообщение от неразрешенного пользователя: {user.id}")
             return
 
+        # Проверяем, не слишком ли короткое сообщение
+        query = update.message.text.replace("\n", ";")
+        if len(query.strip()) < 3:
+            await update.message.reply_text(
+                "Пожалуйста, введите более подробное описание задачи или напоминания."
+            )
+            return
+
+        # Отправляем индикатор печати
+        await self.bot.send_chat_action(chat_id=user.id, action=telegram.constants.ChatAction.TYPING)
+
         # Получаем теги пользователя
         tags = self.db.get_user_tags(user.id) + [{"name": "default", "start_time": "00:00", "end_time": "23:59"}]
-        query = update.message.text.replace("\n", ";")
 
         try:
             # Извлекаем задачи из сообщения
@@ -277,11 +331,19 @@ class ReminderBot:
             keyboard = []
             unconfirmed_reminders = self.db.list_unconfirmed_reminders(user.id)
 
-            for unconfirmed_reminder in unconfirmed_reminders:
-                due_time = parse_timestamp(unconfirmed_reminder['due_time'])
-                text = f"{short_format_datetime(due_time)} {unconfirmed_reminder['text']} [{unconfirmed_reminder['tag_id']}]"
-                callback_data = f"confirm_task:{unconfirmed_reminder['id']}"
-                keyboard.append([InlineKeyboardButton(text, callback_data=callback_data)])
+            # Группируем задачи по дате для более удобного отображения
+            grouped_tasks = self._group_unconfirmed_tasks_by_date(unconfirmed_reminders)
+
+            for date_group, tasks in grouped_tasks.items():
+                # Добавляем заголовок даты
+                keyboard.append([InlineKeyboardButton(f"📅 {date_group}", callback_data="date_header")])
+
+                for task in tasks:
+                    due_time = parse_timestamp(task['due_time'])
+                    time_str = due_time.strftime('%H:%M')
+                    text = f"{time_str} - {task['text']} [{task['tag_id']}]"
+                    callback_data = f"confirm_task:{task['id']}"
+                    keyboard.append([InlineKeyboardButton(text, callback_data=callback_data)])
 
             keyboard.append([InlineKeyboardButton("Отменить оставшиеся", callback_data="confirm_task:remove")])
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -302,19 +364,55 @@ class ReminderBot:
             await update.message.reply_text(
                 "Произошла ошибка при обработке вашего запроса. Пожалуйста, попробуйте еще раз.")
 
-    async def confirm_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Обрабатывает подтверждение задачи пользователем.
+    def _group_unconfirmed_tasks_by_date(self, tasks: List[Dict]) -> Dict[str, List[Dict]]:
+        """Группирует неподтвержденные задачи по дате.
 
         Args:
-            update: Объект обновления Telegram
-            context: Контекст обработчика Telegram
+            tasks: Список неподтвержденных задач
+
+        Returns:
+            Словарь с задачами, сгруппированными по датам
         """
+        grouped = {}
+
+        for task in tasks:
+            due_time = parse_timestamp(task['due_time'])
+            today = datetime.now(SERVER_TIMEZONE).date()
+            tomorrow = today + timedelta(days=1)
+
+            if due_time.date() == today:
+                date_group = "Сегодня"
+            elif due_time.date() == tomorrow:
+                date_group = "Завтра"
+            else:
+                date_group = format_date(due_time)
+
+            if date_group not in grouped:
+                grouped[date_group] = []
+
+            grouped[date_group].append(task)
+
+        # Сортируем задачи внутри каждой группы по времени
+        for date_group in grouped:
+            grouped[date_group].sort(key=lambda x: parse_timestamp(x['due_time']))
+
+        # Возвращаем словарь с отсортированными ключами
+        return {k: grouped[k] for k in sorted(grouped.keys())}
+
+    async def confirm_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Обрабатывает подтверждение задачи пользователем."""
         user = update.effective_user
         if not self.is_tg_user_allowed(user):
             logger.warning(f"Попытка подтверждения задачи от неразрешенного пользователя: {user.id}")
             return
 
         query = update.callback_query
+
+        # Пропускаем обработку заголовков дат
+        if query.data == "date_header":
+            await self.bot.answer_callback_query(query.id)
+            return
+
         unconfirmed_task_id = query.data.split(":")[1]
 
         try:
@@ -322,6 +420,10 @@ class ReminderBot:
                 deleted_count = self.db.delete_unconfirmed_reminders(query.from_user.id)
                 logger.info(f"Удалено {deleted_count} неподтвержденных напоминаний для пользователя {user.id}")
                 await self.bot.answer_callback_query(query.id, text="Оставшиеся напоминания отменены")
+
+                # Обновляем сообщение, чтобы удалить кнопки
+                if query.message:
+                    await query.message.edit_text("Напоминания отменены")
                 return
 
             task_data = self.db.get_unconfirmed_reminder(unconfirmed_task_id)
@@ -341,6 +443,27 @@ class ReminderBot:
             self.db.delete_unconfirmed_reminder(unconfirmed_task_id)
 
             if reminder_id:
+                # Обновление клавиатуры в интерфейсе - создаем новую клавиатуру
+                if query.message and query.message.reply_markup:
+                    new_keyboard = []
+                    for row in query.message.reply_markup.inline_keyboard:
+                        new_row = []
+                        for button in row:
+                            if button.callback_data == query.data:
+                                # Создаем новую кнопку с измененным текстом
+                                new_row.append(InlineKeyboardButton(
+                                    f"✅ {button.text}",
+                                    callback_data=button.callback_data
+                                ))
+                            else:
+                                new_row.append(button)
+                        new_keyboard.append(new_row)
+
+                    try:
+                        await query.message.edit_reply_markup(InlineKeyboardMarkup(new_keyboard))
+                    except Exception as e:
+                        logger.error(f"Не удалось обновить клавиатуру: {e}")
+
                 await self.bot.send_message(
                     query.from_user.id,
                     f"✅ Задача «{task_data['text']}» добавлена на {short_format_datetime(parse_timestamp(task_data['due_time']))}!"
@@ -391,6 +514,14 @@ class ReminderBot:
             new_due_dt = datetime.now(SERVER_TIMEZONE) + delta
 
             if self.db.reschedule(task_id, new_due_dt):
+                # Обновляем сообщение, добавляя информацию о переносе
+                if query.message:
+                    try:
+                        new_text = f"{query.message.text}\n\n⏰ Перенесено на {short_format_datetime(new_due_dt)}"
+                        await query.message.edit_text(new_text)
+                    except Exception as e:
+                        logger.error(f"Не удалось обновить сообщение: {e}")
+
                 await self.bot.send_message(
                     query.from_user.id,
                     f"⏰ Задача «{task_data['text']}» перенесена на {short_format_datetime(new_due_dt)}!"
@@ -453,44 +584,57 @@ class ReminderBot:
             reminders = self.db.get_due_reminders(dt)
             logger.info(f"Проверка напоминаний: найдено {len(reminders)} активных напоминаний")
 
+            # Группируем напоминания по пользователям для оптимизации
+            user_reminders = {}
             for reminder in reminders:
-                reminder_time = parse_timestamp(reminder["due_time"])
+                user_id = reminder['user_id']
+                if user_id not in user_reminders:
+                    user_reminders[user_id] = []
+                user_reminders[user_id].append(reminder)
 
-                # Проверка, не отправляем напоминание раньше времени
-                if reminder_time > dt:
-                    err_message = f"Попытка отправить напоминание {reminder['id']} раньше времени: {reminder_time} > {dt}"
-                    logger.error(err_message)
-                    await self.bot.send_message(chat_id=ADMIN_ID, text=err_message)
-                    continue
-
+            for user_id, user_reminder_list in user_reminders.items():
                 try:
-                    user = self.db.get_user(reminder['user_id'])
+                    user = self.db.get_user(user_id)
                     if not user:
-                        logger.error(f"Пользователь {reminder['user_id']} не найден для напоминания {reminder['id']}")
+                        logger.error(f"Пользователь {user_id} не найден")
                         continue
 
-                    # Подготовка сообщения с рекомендациями
-                    assist = ""
-                    if reminder.get("assist") and reminder["assist"].strip():
-                        assist = f"\n\n---\n{reminder['assist']}"
+                    for reminder in user_reminder_list:
+                        reminder_time = parse_timestamp(reminder["due_time"])
 
-                    # Создание клавиатуры для отложенных напоминаний
-                    keyboard = self._create_reschedule_keyboard(reminder["id"])
-                    reply_markup = InlineKeyboardMarkup(keyboard)
+                        # Проверка, не отправляем напоминание раньше времени
+                        if reminder_time > dt:
+                            err_message = f"Попытка отправить напоминание {reminder['id']} раньше времени: {reminder_time} > {dt}"
+                            logger.error(err_message)
+                            await self.bot.send_message(chat_id=ADMIN_ID, text=err_message)
+                            continue
 
-                    # Отправка напоминания
-                    await self.bot.send_message(
-                        chat_id=user['telegram_id'],
-                        text=f"⏰ Напоминание: {reminder['text']}{assist}",
-                        reply_markup=reply_markup
-                    )
+                        try:
+                            # Подготовка сообщения с рекомендациями
+                            assist = ""
+                            if reminder.get("assist") and reminder["assist"].strip():
+                                assist = f"\n\n---\n{reminder['assist']}"
 
-                    # Отмечаем напоминание как отправленное
-                    self.db.mark_reminder_completed(reminder['id'])
-                    logger.info(f"Отправлено напоминание {reminder['id']} пользователю {user['telegram_id']}")
+                            # Создание клавиатуры для отложенных напоминаний
+                            keyboard = self._create_reschedule_keyboard(reminder["id"])
+                            reply_markup = InlineKeyboardMarkup(keyboard)
+
+                            # Отправка напоминания
+                            await self.bot.send_message(
+                                chat_id=user['telegram_id'],
+                                text=f"⏰ Напоминание: {reminder['text']}{assist}",
+                                reply_markup=reply_markup
+                            )
+
+                            # Отмечаем напоминание как отправленное
+                            self.db.mark_reminder_completed(reminder['id'])
+                            logger.info(f"Отправлено напоминание {reminder['id']} пользователю {user['telegram_id']}")
+
+                        except Exception as e:
+                            logger.error(f"Ошибка при отправке напоминания {reminder['id']}: {e}")
 
                 except Exception as e:
-                    logger.error(f"Ошибка при отправке напоминания {reminder['id']}: {e}")
+                    logger.error(f"Ошибка при обработке напоминаний пользователя {user_id}: {e}")
 
         except Exception as e:
             logger.error(f"Ошибка при проверке напоминаний: {e}")
@@ -520,7 +664,50 @@ class ReminderBot:
                 InlineKeyboardButton("вечером", callback_data=f"reschedule_task:{reminder_id}:evening"),
                 InlineKeyboardButton("в выходные", callback_data=f"reschedule_task:{reminder_id}:weekends"),
             ],
+            [
+                InlineKeyboardButton("✓ Выполнено", callback_data=f"complete_task:{reminder_id}")
+            ]
         ]
+
+    async def complete_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Обрабатывает отметку задачи как выполненной.
+
+        Args:
+            update: Объект обновления Telegram
+            context: Контекст обработчика Telegram
+        """
+        user = update.effective_user
+        if not self.is_tg_user_allowed(user):
+            logger.warning(f"Попытка отметки задачи от неразрешенного пользователя: {user.id}")
+            return
+
+        query = update.callback_query
+        task_id = query.data.split(":")[1]
+
+        try:
+            task_data = self.db.get_reminder(task_id)
+            if not task_data:
+                logger.warning(f"Попытка отметить несуществующее напоминание: {task_id}")
+                await self.bot.answer_callback_query(query.id, text="Напоминание не найдено")
+                return
+
+            if self.db.mark_reminder_completed(task_id):
+                # Обновляем сообщение
+                if query.message:
+                    try:
+                        new_text = f"{query.message.text}\n\n✅ Выполнено!"
+                        await query.message.edit_text(new_text)
+                    except Exception as e:
+                        logger.error(f"Не удалось обновить сообщение: {e}")
+
+                await self.bot.answer_callback_query(query.id, text="Задача отмечена как выполненная")
+                logger.info(f"Пользователь {user.id} отметил задачу '{task_data['text']}' как выполненную")
+            else:
+                await self.bot.answer_callback_query(query.id, text="Не удалось обновить статус задачи")
+
+        except Exception as e:
+            logger.error(f"Ошибка при отметке задачи как выполненной: {e}")
+            await self.bot.answer_callback_query(query.id, text="Произошла ошибка")
 
     async def ask_llm_assist(self, query: str) -> Dict:
         """Запрашивает у LLM дополнительные рекомендации для задачи.
@@ -550,9 +737,17 @@ class ReminderBot:
 
         logger.info(f"Запрос советов LLM для задачи: {query}")
         try:
-            response = await self.yandexgpt.query(system, str(query))
-            logger.info(f"Получен ответ от LLM с советами")
-            return yaml.safe_load(strip_markdown.strip_markdown(response).strip("`"))
+            for attempt in range(3):
+                try:
+                    response = await self.yandexgpt.query(system, str(query))
+                    logger.info(f"Получен ответ от LLM с советами")
+                    return yaml.safe_load(strip_markdown.strip_markdown(response).strip("`"))
+                except Exception as e:
+                    if attempt < 2:
+                        logger.warning(f"Попытка {attempt + 1} получения советов не удалась: {e}. Повторная попытка...")
+                        await asyncio.sleep(1)
+                    else:
+                        raise
         except Exception as e:
             logger.error(f"Ошибка при получении советов LLM: {e}")
             return {"hasAssist": False, "assist": ""}
@@ -622,16 +817,26 @@ class ReminderBot:
                     logger.warning(f"Пользователь {user_id} не найден для ежедневного уведомления")
                     continue
 
-                # Формируем список задач на день
-                tasks_text = []
+                # Группируем задачи по тегам для более наглядного отображения
+                tasks_by_tag = {}
                 for reminder in user_reminders:
-                    due_time = parse_timestamp(reminder['due_time'])
-                    tasks_text.append(
-                        f"• {reminder['text']} ({short_format_datetime(due_time)}) [{reminder['tag_id']}]"
-                    )
+                    tag_id = reminder['tag_id']
+                    if tag_id not in tasks_by_tag:
+                        tasks_by_tag[tag_id] = []
+                    tasks_by_tag[tag_id].append(reminder)
 
-                if tasks_text:
-                    message = f"Доброе утро! На сегодня запланировано:\n\n{'\n'.join(tasks_text)}"
+                # Формируем список задач на день
+                tasks_text = ["Доброе утро! На сегодня запланировано:"]
+
+                for tag_id, tag_tasks in tasks_by_tag.items():
+                    tasks_text.append(f"\n🏷 {tag_id}:")
+                    for task in tag_tasks:
+                        due_time = parse_timestamp(task['due_time'])
+                        time_str = due_time.strftime('%H:%M')
+                        tasks_text.append(f"• {time_str} - {task['text']}")
+
+                if len(tasks_text) > 1:  # Проверяем, что есть хотя бы один тег с задачами
+                    message = "\n".join(tasks_text)
                     await self.bot.send_message(chat_id=user['telegram_id'], text=message)
                     logger.info(f"Отправлено ежедневное уведомление пользователю {user_id}")
 
@@ -668,8 +873,17 @@ class ReminderBot:
         """Проверяет логи на наличие ошибок."""
         try:
             with open("main.log", "r") as f:
+                # Определяем, где остановились в прошлый раз
+                if self.last_log_position > 0:
+                    f.seek(self.last_log_position)
+
                 found_errors = set()
-                for line in f.readlines()[1:]:  # Пропускаем первую строку
+                lines = f.readlines()
+
+                # Запоминаем позицию для следующего запуска
+                self.last_log_position = f.tell()
+
+                for line in lines:
                     lline = line.lower()
                     if "error" in lline or "exception" in lline or "fail" in lline:
                         if len(found_errors) > 10:
@@ -678,7 +892,7 @@ class ReminderBot:
                         found_errors.add(line[:1000])  # Обрезаем длинные строки
 
                 if found_errors:
-                    err_message = f"Обнаружены ошибки в логах:\n\n{'\n'.join(found_errors)}"
+                    err_message = f"Обнаружены новые ошибки в логах:\n\n{'\n'.join(found_errors)}"
                     await self.bot.send_message(chat_id=ADMIN_ID, text=err_message)
         except Exception as e:
             logger.error(f"Ошибка при проверке логов: {e}")
@@ -735,6 +949,9 @@ class ReminderBot:
             # Затем очищаем его
             with open("main.log", "w") as f:
                 f.write(f"--- Лог очищен {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+
+            # Сбрасываем позицию
+            self.last_log_position = 0
 
             await update.message.reply_text("Лог успешно очищен")
             logger.info(f"Пользователь {user.id} очистил лог")
@@ -841,6 +1058,10 @@ class ReminderBot:
                 return
 
             if self.db.update_user_permission(telegram_id, True):
+                # Обновляем кэш
+                cache_key = f"user_{telegram_id}"
+                self.user_cache[cache_key] = True
+
                 await update.message.reply_text(f"✅ Доступ пользователю '{telegram_id}' успешно предоставлен!")
                 logger.info(f"Пользователь {user.id} предоставил доступ пользователю {telegram_id}")
             else:
@@ -865,7 +1086,12 @@ class ReminderBot:
         db_user = self.db.get_user(user.id)
         if not self.user_is_admin(db_user):
             logger.warning(f"Попытка просмотра всех задач от не-администратора: {user.id}")
-            await update.message.reply_text("У вас нет прав для выполнения этой команды")
+            # Проверяем, откуда пришел запрос
+            if update.callback_query:
+                await self.bot.answer_callback_query(update.callback_query.id,
+                                                     text="У вас нет прав для выполнения этой команды")
+            else:
+                await update.message.reply_text("У вас нет прав для выполнения этой команды")
             return
 
         try:
@@ -889,13 +1115,20 @@ class ReminderBot:
             if self.db_tasks_listing_page * page_size >= len(all_tasks):
                 self.db_tasks_listing_page = 0
 
+            # Сортируем задачи по времени
+            all_tasks.sort(key=lambda x: x["due_time"])
+
             # Подготавливаем страницу результатов
             start_idx = self.db_tasks_listing_page * page_size
             end_idx = min(start_idx + page_size, len(all_tasks))
             page_tasks = all_tasks[start_idx:end_idx]
 
             if not page_tasks:
-                await update.message.reply_text("📋 Задачи не найдены")
+                # Отправляем сообщение в зависимости от типа запроса
+                if update.callback_query:
+                    await update.callback_query.message.edit_text("📋 Задачи не найдены")
+                else:
+                    await update.message.reply_text("📋 Задачи не найдены")
                 return
 
             # Формируем ответ
@@ -909,12 +1142,63 @@ class ReminderBot:
             response = "\n".join(response_lines)
             self.db_tasks_listing_page += 1
 
-            await update.message.reply_text(response)
+            # Добавляем кнопки навигации
+            keyboard = [
+                [
+                    InlineKeyboardButton("⬅️ Назад", callback_data="db_tasks_prev"),
+                    InlineKeyboardButton("Далее ➡️", callback_data="db_tasks_next")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            # Отправляем или обновляем сообщение в зависимости от типа запроса
+            if update.callback_query:
+                await update.callback_query.message.edit_text(response, reply_markup=reply_markup)
+            else:
+                await update.message.reply_text(response, reply_markup=reply_markup)
+
             logger.info(f"Пользователь {user.id} просмотрел страницу задач {self.db_tasks_listing_page}")
 
         except Exception as e:
             logger.error(f"Ошибка при просмотре задач: {e}")
-            await update.message.reply_text("Произошла ошибка при получении списка задач")
+            # Обрабатываем ошибку в зависимости от типа запроса
+            if update.callback_query:
+                await self.bot.answer_callback_query(update.callback_query.id, text="Произошла ошибка")
+            else:
+                await update.message.reply_text("Произошла ошибка при получении списка задач")
+
+    async def db_tasks_navigation(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Обрабатывает навигацию по списку задач.
+
+        Args:
+            update: Объект обновления Telegram
+            context: Контекст обработчика Telegram
+        """
+        user = update.effective_user
+        if not self.is_tg_user_allowed(user):
+            logger.warning(f"Попытка навигации по задачам от неразрешенного пользователя: {user.id}")
+            return
+
+        db_user = self.db.get_user(user.id)
+        if not self.user_is_admin(db_user):
+            logger.warning(f"Попытка навигации по задачам от не-администратора: {user.id}")
+            await self.bot.answer_callback_query(update.callback_query.id, text="У вас нет прав для этой операции")
+            return
+
+        query = update.callback_query
+        direction = query.data.split("_")[-1]
+
+        try:
+            if direction == "prev":
+                self.db_tasks_listing_page = max(0, self.db_tasks_listing_page - 2)  # -2 т.к. в db_tasks_list будет +1
+
+            # Запускаем обновление списка
+            await self.db_tasks_list(update, context)
+            await self.bot.answer_callback_query(query.id)
+
+        except Exception as e:
+            logger.error(f"Ошибка при навигации по задачам: {e}")
+            await self.bot.answer_callback_query(query.id, text="Произошла ошибка")
 
     async def user_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Обрабатывает команду просмотра списка пользователей.
@@ -943,9 +1227,9 @@ class ReminderBot:
                 return
 
             for user_info in users:
-                status = "Allowed" if user_info["is_allowed"] else "New"
-                role = "VIP" if user_info["is_admin"] else ""
-                text = f"{user_info['full_name']} - ID: {user_info['telegram_id']} ({status}) {role}"
+                status = "✅" if user_info["is_allowed"] else "🆕"
+                role = "👑" if user_info["is_admin"] else ""
+                text = f"{status} {user_info['full_name']} ({user_info['telegram_id']}) {role}"
                 callback_data = f"user_get:{user_info['telegram_id']}"
                 keyboard.append([InlineKeyboardButton(text, callback_data=callback_data)])
 
@@ -1002,12 +1286,136 @@ class ReminderBot:
             tasks = self.db.list_uncompleted_reminders(target_user['telegram_id'])
             user_info += f"Активных задач: {len(tasks)}"
 
-            await self.bot.send_message(user.id, user_info)
+            # Добавляем кнопки управления пользователем
+            keyboard = []
+            if user.id != int(telegram_id) and (user.id == ADMIN_ID or not target_user['is_admin']):
+                action = "Заблокировать" if target_user['is_allowed'] else "Разблокировать"
+                callback_data = f"user_toggle:{telegram_id}"
+                keyboard.append([InlineKeyboardButton(action, callback_data=callback_data)])
+
+                if not target_user['is_admin']:
+                    keyboard.append(
+                        [InlineKeyboardButton("Сделать администратором", callback_data=f"user_admin:{telegram_id}")])
+                elif user.id == ADMIN_ID:
+                    keyboard.append(
+                        [InlineKeyboardButton("Снять права администратора", callback_data=f"user_admin:{telegram_id}")])
+
+            if keyboard:
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await self.bot.send_message(user.id, user_info, reply_markup=reply_markup)
+            else:
+                await self.bot.send_message(user.id, user_info)
+
             await self.bot.answer_callback_query(query.id)
             logger.info(f"Пользователь {user.id} запросил информацию о пользователе {telegram_id}")
 
         except Exception as e:
             logger.error(f"Ошибка при получении информации о пользователе: {e}")
+            await self.bot.answer_callback_query(update.callback_query.id, text="Произошла ошибка")
+
+    async def user_toggle(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Обрабатывает запрос на изменение статуса пользователя.
+
+        Args:
+            update: Объект обновления Telegram
+            context: Контекст обработчика Telegram
+        """
+        user = update.effective_user
+        if not self.is_tg_user_allowed(user):
+            logger.warning(f"Попытка изменения статуса от неразрешенного пользователя: {user.id}")
+            return
+
+        db_user = self.db.get_user(user.id)
+        if not self.user_is_admin(db_user):
+            logger.warning(f"Попытка изменения статуса от не-администратора: {user.id}")
+            await self.bot.answer_callback_query(update.callback_query.id, text="У вас нет прав для этого")
+            return
+
+        try:
+            query = update.callback_query
+            telegram_id = query.data.split(":")[1]
+
+            target_user = self.db.get_user(telegram_id)
+            if not target_user:
+                await self.bot.answer_callback_query(query.id, text="Пользователь не найден")
+                return
+
+            # Проверяем защиту от блокировки админов
+            if target_user['is_admin'] and user.id != ADMIN_ID:
+                await self.bot.answer_callback_query(query.id, text="Нельзя изменять статус администратора")
+                return
+
+            # Инвертируем статус
+            new_status = not target_user['is_allowed']
+
+            if self.db.update_user_permission(telegram_id, new_status):
+                # Обновляем кэш
+                cache_key = f"user_{telegram_id}"
+                self.user_cache[cache_key] = new_status
+
+                action = "разблокирован" if new_status else "заблокирован"
+                await self.bot.answer_callback_query(query.id, text=f"Пользователь {action}")
+
+                # Обновляем информацию о пользователе
+                context.args = [telegram_id]
+                update.callback_query.data = f"user_get:{telegram_id}"
+                await self.user_get(update, context)
+
+                logger.info(f"Пользователь {user.id} изменил статус пользователя {telegram_id} на {new_status}")
+            else:
+                await self.bot.answer_callback_query(query.id, text="Не удалось изменить статус")
+
+        except Exception as e:
+            logger.error(f"Ошибка при изменении статуса пользователя: {e}")
+            await self.bot.answer_callback_query(update.callback_query.id, text="Произошла ошибка")
+
+    async def user_admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Обрабатывает запрос на изменение прав администратора.
+
+        Args:
+            update: Объект обновления Telegram
+            context: Контекст обработчика Telegram
+        """
+        user = update.effective_user
+        if not self.is_tg_user_allowed(user):
+            logger.warning(f"Попытка изменения прав от неразрешенного пользователя: {user.id}")
+            return
+
+        db_user = self.db.get_user(user.id)
+        if not self.user_is_admin(db_user) or user.id != ADMIN_ID:
+            logger.warning(f"Попытка изменения прав от не-администратора: {user.id}")
+            await self.bot.answer_callback_query(update.callback_query.id, text="У вас нет прав для этого")
+            return
+
+        try:
+            query = update.callback_query
+            telegram_id = query.data.split(":")[1]
+
+            target_user = self.db.get_user(telegram_id)
+            if not target_user:
+                await self.bot.answer_callback_query(query.id, text="Пользователь не найден")
+                return
+
+            # Инвертируем статус админа
+            new_admin_status = not target_user['is_admin']
+
+            # Здесь должен быть метод для обновления статуса админа, реализуйте его в Database
+            if self.db.update_user_admin_status(telegram_id, new_admin_status):
+                action = "получил права администратора" if new_admin_status else "лишен прав администратора"
+                await self.bot.answer_callback_query(query.id, text=f"Пользователь {action}")
+
+                # Обновляем информацию о пользователе
+                context.args = [telegram_id]
+                update.callback_query.data = f"user_get:{telegram_id}"
+                await self.user_get(update, context)
+
+                logger.info(
+                    f"Пользователь {user.id} изменил права администратора пользователя {telegram_id} на {new_admin_status}")
+            else:
+                await self.bot.answer_callback_query(query.id, text="Не удалось изменить права")
+
+        except Exception as e:
+            logger.error(f"Ошибка при изменении прав администратора: {e}")
             await self.bot.answer_callback_query(update.callback_query.id, text="Произошла ошибка")
 
     async def disallow(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1055,6 +1463,10 @@ class ReminderBot:
                 return
 
             if self.db.update_user_permission(telegram_id, False):
+                # Обновляем кэш
+                cache_key = f"user_{telegram_id}"
+                self.user_cache[cache_key] = False
+
                 await update.message.reply_text(f"✅ Доступ у пользователя {telegram_id} успешно отозван!")
                 logger.info(f"Пользователь {user.id} отозвал доступ у пользователя {telegram_id}")
             else:
@@ -1080,17 +1492,32 @@ class ReminderBot:
             tags = self.db.get_user_tags(user.id)
 
             if not tags:
-                await self.bot.send_message(user.id, "📋 У вас пока нет тегов")
+                # Добавляем кнопку для быстрого создания тегов
+                keyboard = [[InlineKeyboardButton("➕ Создать тег", callback_data="create_tag")]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+
+                await self.bot.send_message(
+                    user.id,
+                    "📋 У вас пока нет тегов. Создайте первый тег командой /newtag имя_тега время_начала время_окончания",
+                    reply_markup=reply_markup
+                )
                 if update.callback_query:
                     await self.bot.answer_callback_query(update.callback_query.id)
                 return
 
-            response_lines = ["🏷 Ваши теги:"]
+            # Создаем клавиатуру с тегами для управления
+            keyboard = []
             for tag in tags:
-                response_lines.append(f"• {tag['name']} ({tag['start_time']}-{tag['end_time']})")
+                tag_info = f"{tag['name']} ({tag['start_time']}-{tag['end_time']})"
+                callback_data = f"tag_edit:{tag['id']}"
+                keyboard.append([InlineKeyboardButton(tag_info, callback_data=callback_data)])
 
-            response = "\n".join(response_lines)
-            await self.bot.send_message(user.id, response)
+            # Добавляем кнопку создания нового тега
+            keyboard.append([InlineKeyboardButton("➕ Создать тег", callback_data="create_tag")])
+
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await self.bot.send_message(user.id, "🏷 Ваши теги:", reply_markup=reply_markup)
+
             if update.callback_query:
                 await self.bot.answer_callback_query(update.callback_query.id)
 
@@ -1125,18 +1552,54 @@ class ReminderBot:
                     await self.bot.answer_callback_query(update.callback_query.id)
                 return
 
-            # Сортируем задачи по времени
-            tasks.sort(key=lambda x: parse_timestamp(x['due_time']))
+            # Группируем задачи по дате
+            grouped_tasks = {}
+            today = datetime.now(SERVER_TIMEZONE).date()
+            tomorrow = today + timedelta(days=1)
 
-            response_lines = ["📋 Ваши напоминания:"]
             for task in tasks:
                 due_time = parse_timestamp(task['due_time'])
-                response_lines.append(
-                    f"• {task['text']} ({short_format_datetime(due_time)}) [{task['tag_id']}]"
-                )
+
+                # Определяем группу
+                if due_time.date() == today:
+                    date_group = "Сегодня"
+                elif due_time.date() == tomorrow:
+                    date_group = "Завтра"
+                else:
+                    date_group = format_date(due_time)
+
+                if date_group not in grouped_tasks:
+                    grouped_tasks[date_group] = []
+
+                grouped_tasks[date_group].append(task)
+
+            # Сортируем задачи внутри групп по времени
+            for date_group in grouped_tasks:
+                grouped_tasks[date_group].sort(key=lambda x: parse_timestamp(x['due_time']))
+
+            # Формируем ответ с группировкой
+            response_lines = ["📋 Ваши напоминания:"]
+
+            for date_group in sorted(grouped_tasks.keys()):
+                response_lines.append(f"\n📅 {date_group}:")
+
+                for task in grouped_tasks[date_group]:
+                    due_time = parse_timestamp(task['due_time'])
+                    time_str = due_time.strftime('%H:%M')
+                    response_lines.append(
+                        f"• {time_str} - {task['text']} [{task['tag_id']}]"
+                    )
 
             response = "\n".join(response_lines)
-            await self.bot.send_message(user.id, response)
+
+            # Добавляем кнопки фильтрации
+            keyboard = [
+                [InlineKeyboardButton("По тегам", callback_data="filter_tasks_by_tag")],
+                [InlineKeyboardButton("По дате", callback_data="filter_tasks_by_date")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            await self.bot.send_message(user.id, response, reply_markup=reply_markup)
             if update.callback_query:
                 await self.bot.answer_callback_query(update.callback_query.id)
 
@@ -1246,9 +1709,13 @@ def main() -> None:
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message))
         application.add_handler(CallbackQueryHandler(bot.confirm_task, pattern="^confirm_task:"))
         application.add_handler(CallbackQueryHandler(bot.reschedule_task, pattern="^reschedule_task:"))
+        application.add_handler(CallbackQueryHandler(bot.complete_task, pattern="^complete_task:"))
         application.add_handler(CallbackQueryHandler(bot.list_tags, pattern="^list_tags"))
         application.add_handler(CallbackQueryHandler(bot.list_tasks, pattern="^list_tasks"))
-        application.add_handler(CallbackQueryHandler(bot.user_get, pattern="^user_get"))
+        application.add_handler(CallbackQueryHandler(bot.user_get, pattern="^user_get:"))
+        application.add_handler(CallbackQueryHandler(bot.user_toggle, pattern="^user_toggle:"))
+        application.add_handler(CallbackQueryHandler(bot.user_admin, pattern="^user_admin:"))
+        application.add_handler(CallbackQueryHandler(bot.db_tasks_navigation, pattern="^db_tasks_(prev|next)"))
         application.add_handler(CallbackQueryHandler(bot.help, pattern="^help"))
 
         # Планировщики
